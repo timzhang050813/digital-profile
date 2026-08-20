@@ -253,7 +253,7 @@ function extractInfo(text) {
   // 学校
   m = text.match(/([\u4e00-\u9fa5A-Za-z]{2,20}?)(?:大学|学院)/);
   if (m) {
-    var sch = m[0].replace(/^(我是|我在|就读于|来自|毕业于|在)/, "");
+    var sch = m[0].replace(/^(我是|我在|就读于|我毕业于|毕业于|来自|在|毕业于)/, "");
     if (/(大学|学院)$/.test(sch) && sch.length >= 4) info.school = sch;
   }
   // 入学年份: XX级 / XX年入学 / 简短年份回答(2022、2022年)
@@ -270,7 +270,7 @@ function extractInfo(text) {
   m = text.match(/(?:系|学院)?([\u4e00-\u9fa5A-Za-z·]{2,20}?专业)/);
   if (m) {
     var majorRaw = m[1].replace(/专业$/, "").trim();
-    majorRaw = majorRaw.replace(/^(我是|我在|就读于|毕业于|来自)/, "");
+    majorRaw = majorRaw.replace(/^(我是|我在|就读于|我毕业于|毕业于|来自)/, "");
     var schoolName = info.school || "";
     if (schoolName && majorRaw.indexOf(schoolName) === 0) {
       majorRaw = majorRaw.slice(schoolName.length);
@@ -1056,14 +1056,34 @@ async function handleInput(text) {
   if (!text) return;
   addMsg(esc(text), "user");
   if (AI_ON) {
+    // ① 快速规则提取:不等 AI,右侧立即刷新(即时反馈)
+    var quick = extractInfo(text);
+    var qTouched = false;
+    var qAdded = [];
+    KEY_FIELDS.forEach(function(qk){
+      if (quick.info[qk] && !D.fields[qk]) {
+        D.fields[qk] = String(quick.info[qk]).trim();
+        qTouched = true; qAdded.push(FIELD_LABELS[qk]); flashField(qk);
+      }
+    });
+    quick.extra.forEach(function(e){
+      var s = String(e).trim();
+      if (s && D.extra.indexOf(s) < 0) { D.extra.push(s); qTouched = true; qAdded.push("其他信息"); flashField("extra"); }
+    });
+    if (qTouched) {
+      save();
+      addSys("📝 已先记录:" + qAdded.join("、") + "(AI 正在精修…)");
+    }
+    // ② AI 精修(大模型语义理解,智能归类、纠错)
     try {
       var r = await aiUnderstand(text);
       if (handleAIResult(r)) return;
     } catch(e) {
-      addSys("⚠️ AI 调用失败(" + (e.message || "未知错误") + "),本次退回基础模式");
+      addSys("⚠️ AI 调用失败(" + (e.message || "未知错误") + "),已用基础提取结果");
     }
   }
   handleRuleInput(text);
+  renderSidebar(); // 兜底:任何路径结束后强制刷新右侧
 }
 /* 基础规则模式(无 AI / AI 失败时兜底;机械理解) */
 function handleRuleInput(text) {
