@@ -139,6 +139,75 @@ function load() {
   return false;
 }
 function save() { try { localStorage.setItem("dpc_state_v1", JSON.stringify(D)); } catch(e) {} renderSidebar(); }
+/* 数据清洗:自动修复旧版本残留的脏数据(拆分/去前缀/移错位/删噪音) */
+function migrateData() {
+  var changed = false;
+  // 1. 数组字段:单条含顿号/逗号的拆开,并清洗前缀
+  OPTIONAL_FIELDS.forEach(function(k){
+    var arr = D.fields[k];
+    if (Array.isArray(arr)) {
+      var out = [];
+      arr.forEach(function(s){
+        String(s).split(/[,，、;；]/).map(cleanItem).forEach(function(p){
+          if (p && out.indexOf(p) < 0) out.push(p);
+        });
+      });
+      if (out.join("|") !== arr.join("|")) { D.fields[k] = out; changed = true; }
+    }
+  });
+  // 2. 专业清洗:去大学/学院名、"XX系"前缀、口语前缀
+  if (D.fields.major) {
+    var mj = String(D.fields.major);
+    var schoolName = D.fields.school || "";
+    if (schoolName && mj.indexOf(schoolName) === 0) mj = mj.slice(schoolName.length);
+    mj = mj.replace(/^[\u4e00-\u9fa5]{2,20}?(?:大学|学院)/, "");
+    mj = mj.replace(/^[\u4e00-\u9fa5]{1,4}系/, "");
+    mj = cleanItem(mj);
+    if (mj !== D.fields.major) { D.fields.major = mj; changed = true; }
+  }
+  // 3. extra 清洗:删年份噪音,把"XX方面增加YY"移入对应字段
+  var ex = [];
+  D.extra.forEach(function(s){
+    var t = String(s);
+    if (/入学年份|^年份|是\d{4}年/.test(t)) { changed = true; return; }
+    var am = t.match(/^(技能|课程|证书|获奖|奖项|项目|经历|社团|校园|意向|评价|专业|学校|年份|爱好|其他)(?:方面|里|中)?(?:增加|加上|补充|追加|再加|添加|多一个)\s*(.+)/);
+    if (am && FIELD_ALIAS[am[1]]) {
+      var fld = FIELD_ALIAS[am[1]];
+      if (OPTIONAL_FIELDS.indexOf(fld) >= 0) {
+        if (!D.fields[fld]) D.fields[fld] = [];
+        var nv = am[2].trim();
+        if (D.fields[fld].indexOf(nv) < 0) D.fields[fld].push(nv);
+        changed = true;
+        return;
+      }
+    }
+    if (ex.indexOf(t) < 0) ex.push(t);
+  });
+  if (ex.join("|") !== D.extra.join("|")) { D.extra = ex; changed = true; }
+  // 4. 错位条目:字段里含"技能方面增加XX"等追加模式 → 移到对应字段
+  OPTIONAL_FIELDS.forEach(function(k){
+    var arr = D.fields[k];
+    if (!Array.isArray(arr)) return;
+    var keep = [];
+    arr.forEach(function(s){
+      var t = String(s);
+      var am = t.match(/^(技能|课程|证书|获奖|奖项|项目|经历|社团|校园|意向|评价|专业|学校|年份|爱好|其他)(?:方面|里|中)?(?:增加|加上|补充|追加|再加|添加|多一个)\s*(.+)/);
+      if (am && FIELD_ALIAS[am[1]] && FIELD_ALIAS[am[1]] !== k) {
+        var fld = FIELD_ALIAS[am[1]];
+        if (OPTIONAL_FIELDS.indexOf(fld) >= 0) {
+          if (!D.fields[fld]) D.fields[fld] = [];
+          var nv = am[2].trim();
+          if (D.fields[fld].indexOf(nv) < 0) D.fields[fld].push(nv);
+          changed = true;
+          return; // 不保留原条目
+        }
+      }
+      if (keep.indexOf(t) < 0) keep.push(t);
+    });
+    if (keep.join("|") !== arr.join("|")) { D.fields[k] = keep; changed = true; }
+  });
+  return changed;
+}
 function resetState() {
   D = {phase:"collect", uid:genUID(), fields:{}, extra:[], verify:[], adjustments:[],
        deep_idx:0, verify_idx:0, pending_q:[]};
@@ -1055,7 +1124,13 @@ input.addEventListener("keydown", function(e){ if (e.key === "Enter") { handleIn
       addSys("⚠️ 分享链接无效或已损坏,请向分享者确认链接完整");
     }
   }
-  if (load()) renderSidebar();
+  if (load()) {
+    if (migrateData()) {
+      save();
+      addSys("🧹 已自动修复旧数据:拆分未拆分的条目、清理口语前缀、移正错位内容");
+    }
+    renderSidebar();
+  }
   if (load() && D.phase === "done") {
     addMsg("欢迎回来!你已有一份完成的档案 ✅<br>" +
            "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
