@@ -33,6 +33,12 @@
   .side-progress { height:6px; background:#1e293b; border-radius:3px; margin:6px 0 10px; overflow:hidden; }
   .side-progress .fill { height:100%; background:linear-gradient(90deg,#22d3ee,#34d399); border-radius:3px; transition:width .4s ease; }
   .side-meta { font-size:11px; color:var(--muted); text-align:center; margin-bottom:8px; }
+  .ai-light { display:inline-block; width:10px; height:10px; border-radius:50%;
+              background:#94a3b8; margin-right:6px; vertical-align:middle;
+              box-shadow:0 0 6px rgba(148,163,184,.6); transition:background .3s; cursor:pointer; }
+  .ai-light.ok { background:#34d399; box-shadow:0 0 8px rgba(52,211,153,.9); }
+  .ai-light.bad { background:#f87171; box-shadow:0 0 8px rgba(248,113,113,.9); }
+  .ai-light.warn { background:#fbbf24; box-shadow:0 0 8px rgba(251,191,36,.9); }
   @media (max-width:800px) {
     #main { flex-direction:column; }
     #side { width:100%; border-left:none; border-top:1px solid #1e293b;
@@ -80,7 +86,10 @@
 <header>
   <h1>📋 数码档案创建器</h1>
   <p>对话式建档 · AI 可信度核验 · 简历式输出</p>
-  <button onclick="aiSetup()" style="position:absolute;right:12px;top:14px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;">⚙️ AI设置</button>
+  <div style="position:absolute;right:12px;top:14px;">
+    <span id="aiLight" class="ai-light" onclick="testAI()" title="AI 连接状态(点击测试)"></span>
+    <button onclick="aiSetup()" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;">⚙️ AI设置</button>
+  </div>
 </header>
 <div id="main">
   <div id="left">
@@ -669,14 +678,45 @@ function aiSetKey(k) {
   AI_KEY = (k || "").trim();
   try { localStorage.setItem("dpc_ai_key", AI_KEY); } catch(e) {}
   AI_ON = !!AI_KEY;
+  renderSidebar();
+}
+/* AI 连接状态灯:灰=未配置 黄=验证中 绿=已连接 红=失败 */
+function setLight(state) {
+  var el = document.getElementById("aiLight");
+  if (!el) return;
+  el.className = "ai-light" + (state === "ok" ? " ok" : state === "bad" ? " bad" : state === "warn" ? " warn" : "");
+}
+function testAI() {
+  if (!AI_ON) {
+    setLight("");
+    addSys("💡 AI 未配置:点右上角 ⚙️ 输入 DeepSeek API Key");
+    return;
+  }
+  setLight("warn");
+  addSys("🟡 正在测试 AI 连接…");
+  fetch("https://api.deepseek.com/models", {
+    headers: { "Authorization": "Bearer " + AI_KEY }
+  }).then(function(res){
+    if (res.ok) {
+      setLight("ok");
+      addSys("🟢 AI 已连接(Key 有效,AI 智能模式可用)");
+    } else {
+      setLight("bad");
+      addSys("🔴 AI 连接失败:Key 无效或余额不足(HTTP " + res.status + ")");
+    }
+  }).catch(function(){
+    setLight("bad");
+    addSys("🔴 AI 连接失败:网络不通(请检查网络/代理)");
+  });
 }
 function aiSetup() {
   var k = window.prompt("输入 DeepSeek API Key(以 sk- 开头)。\nKey 只保存在你当前浏览器,不会上传到任何服务器。\n(不需要可点取消)", AI_KEY);
   if (k === null) return;
   aiSetKey(k);
   addSys(AI_ON
-    ? "✅ AI 智能模式已开启!现在由大模型理解你的每句话(提取/修改/更正/核验都能听懂)"
+    ? "✅ AI 智能模式已开启!正在验证连接…"
     : "❌ Key 已清除,退回基础规则模式");
+  if (AI_ON) testAI();
 }
 function aiUnderstand(text) {
   var fields = {};
@@ -1077,9 +1117,11 @@ async function handleInput(text) {
     // ② AI 精修(大模型语义理解,智能归类、纠错)
     try {
       var r = await aiUnderstand(text);
-      if (handleAIResult(r)) return;
+      if (handleAIResult(r)) { renderSidebar(); return; }
+      renderSidebar();
     } catch(e) {
       addSys("⚠️ AI 调用失败(" + (e.message || "未知错误") + "),已用基础提取结果");
+      renderSidebar();
     }
   }
   handleRuleInput(text);
@@ -1267,6 +1309,8 @@ input.addEventListener("keydown", function(e){ if (e.key === "Enter") { handleIn
     }
     renderSidebar();
   }
+  // 启动时自动验证 AI 连接状态(有 key 时)
+  if (AI_ON) testAI();
   if (load() && D.phase === "done") {
     addMsg("欢迎回来!你已有一份完成的档案 ✅<br>" +
            "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
