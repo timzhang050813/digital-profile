@@ -11,6 +11,25 @@
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
          background:var(--bg); color:var(--text); min-height:100vh; }
+  #app { display:flex; flex-direction:column; height:100vh; }
+  #main { display:flex; flex:1; min-height:0; max-width:1100px; margin:0 auto; width:100%; }
+  #left { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #chat { flex:1; overflow-y:auto; padding:14px 12px 20px; }
+  #side { width:290px; flex-shrink:0; border-left:1px solid #1e293b;
+          background:#0b1524; overflow-y:auto; padding:12px; }
+  .side-title { font-size:14px; font-weight:700; color:var(--accent); margin-bottom:8px; }
+  .side-item { background:var(--card); border:1px solid #334155; border-radius:10px;
+               padding:8px 10px; margin-bottom:8px; font-size:13px; }
+  .side-item .k { color:var(--muted); font-size:12px; }
+  .side-item .v { margin-top:2px; word-break:break-word; }
+  .side-edit { float:right; background:var(--accent); color:#0f172a; border:none;
+               border-radius:6px; padding:2px 10px; font-size:12px; cursor:pointer; }
+  .side-empty { color:var(--muted); font-size:12px; text-align:center; padding:20px 0; }
+  @media (max-width:800px) {
+    #main { flex-direction:column; }
+    #side { width:100%; border-left:none; border-top:1px solid #1e293b;
+            max-height:34vh; }
+  }
   header { background:linear-gradient(135deg,#1e3a5f,#312e81); padding:18px 16px;
            text-align:center; position:sticky; top:0; z-index:10; box-shadow:0 2px 12px rgba(0,0,0,.4); }
   header h1 { font-size:19px; letter-spacing:1px; }
@@ -49,12 +68,18 @@
 </style>
 </head>
 <body>
+<div id="app">
 <header>
   <h1>📋 数码档案创建器</h1>
   <p>对话式建档 · AI 可信度核验 · 简历式输出</p>
   <button onclick="aiSetup()" style="position:absolute;right:12px;top:14px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;">⚙️ AI设置</button>
 </header>
-<div id="chat"></div>
+<div id="main">
+  <div id="left">
+    <div id="chat"></div>
+  </div>
+  <div id="side"><div class="side-title">📋 数码档案</div><div id="sidePanel"></div></div>
+</div>
 <div id="inputbar">
   <div class="wrap">
     <input id="input" type="text" placeholder="输入你的信息…(手机键盘 Enter 发送)" autocomplete="off">
@@ -63,6 +88,7 @@
 </div>
 <input type="file" id="fileImport" accept=".json" style="display:none"
        onchange="importBackup(this.files[0]); this.value='';">
+</div>
 <script>
 "use strict";
 /* =====================================================================
@@ -112,7 +138,7 @@ function load() {
   } catch(e) {}
   return false;
 }
-function save() { try { localStorage.setItem("dpc_state_v1", JSON.stringify(D)); } catch(e) {} }
+function save() { try { localStorage.setItem("dpc_state_v1", JSON.stringify(D)); } catch(e) {} renderSidebar(); }
 function resetState() {
   D = {phase:"collect", uid:genUID(), fields:{}, extra:[], verify:[], adjustments:[],
        deep_idx:0, verify_idx:0, pending_q:[]};
@@ -597,6 +623,7 @@ function aiUnderstand(text) {
     "self_eval自我评价(数组)。零散信息放extra(数组)。" +
     "用户消息可能是:1)自我介绍或回答某个追问→intent=extract,给出提取字段,reply简短确认;" +
     "2)查看/修改/增加/更正/重新开始→intent=command,type为view/reset/modify/append/correct," +
+    "(用户说'重新来/从头开始/从学校开始重新来/重填'→type=reset)," +
     "field用中文(学校/专业/入学年份/课程/技能/项目/经历/社团/校园/证书/获奖/荣誉/意向/自我评价/评价/爱好/其他)," +
     "value为新值(数组字段请给数组);3)回答核验题→intent=verify,给出signals语境分析" +
     "(各0-5:specificity具体性 naturalness自然度 consistency与档案一致性 plausibility常识合理性 evasiveness回避度)," +
@@ -648,9 +675,20 @@ function handleAIResult(r) {
       if (s && D.extra.indexOf(s) < 0) { D.extra.push(s); touched = true; }
     });
     if (touched) { save(); addSys("✅ 已记录"); }
-    if (r.reply) addMsg(r.reply, "bot");
-    if (D.phase === "collect") askKeyField();
-    else if (D.phase === "deep") askDeep();
+    if (r.reply && D.phase !== "verify") addMsg(r.reply, "bot");
+    // 流程推进(由前端状态机决定,AI 无权跳流程):
+    // 关键字段(学校/专业/年份)没齐 → 回到 collect 逐项问;齐了 → 深度阶段
+    var miss = KEY_FIELDS.filter(function(k){return !D.fields[k];});
+    if (miss.length) {
+      D.phase = "collect";
+      askKeyField();
+    } else if (D.phase === "deep") {
+      askDeep();
+    } else if (D.phase === "collect") {
+      D.phase = "deep"; D.deep_idx = 0;
+      save();
+      askDeep();
+    }
     return true;
   }
   if (intent === "command") {
@@ -740,6 +778,57 @@ function handleCorrection(text) {
     }
   }
   return changed;
+}
+/* 侧边栏:实时档案面板,每条带修改按钮 */
+function renderSidebar() {
+  var panel = document.getElementById("sidePanel");
+  if (!panel) return;
+  var html = "";
+  var has = false;
+  function item(k, v, label) {
+    has = true;
+    var show = Array.isArray(v) ? v.join("、") : String(v || "");
+    if (!show.trim()) return;
+    var editBtn = D.phase === "shared" ? "" :
+      "<span class='side-edit' onclick='editField(\"" + k + "\")'>✏️修改</span>";
+    html += "<div class='side-item'>" + editBtn +
+            "<div class='k'>" + label + "</div><div class='v'>" + esc(show) + "</div></div>";
+  }
+  KEY_FIELDS.forEach(function(k){ item(k, D.fields[k], FIELD_LABELS[k]); });
+  OPTIONAL_FIELDS.forEach(function(k){
+    item(k, D.fields[k], OPTIONAL_EMOJI[k] + " " + OPTIONAL_LABELS[k]);
+  });
+  if (D.extra.length) item("extra", D.extra, "ℹ️ 其他");
+  if (!has) html += "<div class='side-empty'>还没有填写内容<br>在左侧对话里告诉我吧</div>";
+  html += "<div style='margin-top:10px;text-align:center;'>" +
+          "<button class='btn ghost' style='font-size:12px;padding:6px 14px;' onclick='sideReset()'>🔄 从头开始</button></div>";
+  panel.innerHTML = html;
+}
+/* 点击修改按钮:弹输入框修改对应字段 */
+function editField(key) {
+  var label = FIELD_LABELS[key] || (OPTIONAL_LABELS[key] ? OPTIONAL_EMOJI[key] + " " + OPTIONAL_LABELS[key] : "其他");
+  var cur = key === "extra" ? D.extra.join("、") :
+             (Array.isArray(D.fields[key]) ? D.fields[key].join("、") : (D.fields[key] || ""));
+  var v = window.prompt("修改「" + label + "」\n(多个值用顿号、分隔)", cur);
+  if (v === null) return;
+  v = v.trim();
+  if (!v) { addSys("⚠️ 修改已取消(空值)"); return; }
+  if (key === "extra") {
+    D.extra = v.split(/[,，、;；]/).map(function(s){return s.trim();}).filter(function(s){return s;});
+  } else if (KEY_FIELDS.indexOf(key) >= 0) {
+    D.fields[key] = v;
+  } else if (OPTIONAL_FIELDS.indexOf(key) >= 0) {
+    D.fields[key] = v.split(/[,，、;；]/).map(function(s){return s.trim();}).filter(function(s){return s;});
+  }
+  save();
+  renderSidebar();
+  addSys("✅ 「" + label + "」已更新为:" + v + "<br>继续在下方输入框补充其他内容,或点右上角完成");
+}
+function sideReset() {
+  resetState();
+  renderSidebar();
+  addSys("🔄 已清空,从头开始填写");
+  greet(); askKeyField();
 }
 /* 查看当前已填内容 */
 function showCurrent() {
@@ -960,11 +1049,13 @@ input.addEventListener("keydown", function(e){ if (e.key === "Enter") { handleIn
       var payload = b64decode(decodeURIComponent(m[1]));
       resetState();
       showShared(payload);
+      renderSidebar();
       return;
     } catch(e) {
       addSys("⚠️ 分享链接无效或已损坏,请向分享者确认链接完整");
     }
   }
+  if (load()) renderSidebar();
   if (load() && D.phase === "done") {
     addMsg("欢迎回来!你已有一份完成的档案 ✅<br>" +
            "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
