@@ -25,6 +25,14 @@
   .side-edit { float:right; background:var(--accent); color:#0f172a; border:none;
                border-radius:6px; padding:2px 10px; font-size:12px; cursor:pointer; }
   .side-empty { color:var(--muted); font-size:12px; text-align:center; padding:20px 0; }
+  .side-flash { animation: flashBg 2s ease; }
+  @keyframes flashBg {
+    0% { background:#1e3a5f; border-color:var(--accent); box-shadow:0 0 0 2px rgba(34,211,238,.35); }
+    100% { background:var(--card); border-color:#334155; box-shadow:none; }
+  }
+  .side-progress { height:6px; background:#1e293b; border-radius:3px; margin:6px 0 10px; overflow:hidden; }
+  .side-progress .fill { height:100%; background:linear-gradient(90deg,#22d3ee,#34d399); border-radius:3px; transition:width .4s ease; }
+  .side-meta { font-size:11px; color:var(--muted); text-align:center; margin-bottom:8px; }
   @media (max-width:800px) {
     #main { flex-direction:column; }
     #side { width:100%; border-left:none; border-top:1px solid #1e293b;
@@ -754,7 +762,7 @@ function handleAIResult(r) {
     var added = [];
     var f = r.fields || {};
     KEY_FIELDS.forEach(function(k){
-      if (f[k] && !D.fields[k]) { D.fields[k] = String(f[k]).trim(); touched = true; added.push(FIELD_LABELS[k]); }
+      if (f[k] && !D.fields[k]) { D.fields[k] = String(f[k]).trim(); touched = true; added.push(FIELD_LABELS[k]); flashField(k); }
     });
     OPTIONAL_FIELDS.forEach(function(k){
       if (f[k]) {
@@ -766,13 +774,13 @@ function handleAIResult(r) {
           v.forEach(function(x){
             if (D.fields[k].indexOf(x) < 0) D.fields[k].push(x);
           });
-          if (D.fields[k].length > before) { touched = true; added.push(OPTIONAL_LABELS[k]); }
+          if (D.fields[k].length > before) { touched = true; added.push(OPTIONAL_LABELS[k]); flashField(k); }
         }
       }
     });
     (r.extra || []).forEach(function(e){
       var s = String(e).trim();
-      if (s && D.extra.indexOf(s) < 0) { D.extra.push(s); touched = true; added.push("其他信息"); }
+      if (s && D.extra.indexOf(s) < 0) { D.extra.push(s); touched = true; added.push("其他信息"); flashField("extra"); }
     });
     if (touched) {
       save();
@@ -821,6 +829,7 @@ function handleAIResult(r) {
           D.extra.push(String(val).trim());
         }
         save();
+        flashField(field);
         addSys("✅ 已" + (c.type === "append" ? "添加" : "更新"));
         showCurrent();
       } else {
@@ -887,19 +896,25 @@ function handleCorrection(text) {
   }
   return changed;
 }
-/* 侧边栏:实时档案面板,每条带修改按钮 */
+/* 侧边栏:实时档案面板(最终结果),每条带修改按钮,刚更新的条目高亮 */
+var FLASH_KEYS = ["school","major","enroll_year","courses","skills","experience",
+                  "campus_activities","certificates","awards","career_intent","self_eval","extra"];
+function flashField(key) { D.lastField = key; }
 function renderSidebar() {
   var panel = document.getElementById("sidePanel");
   if (!panel) return;
   var html = "";
   var has = false;
+  var total = FLASH_KEYS.length;
+  var filled = countFilled();
   function item(k, v, label) {
     has = true;
     var show = Array.isArray(v) ? v.join("、") : String(v || "");
     if (!show.trim()) return;
     var editBtn = D.phase === "shared" ? "" :
       "<span class='side-edit' onclick='editField(\"" + k + "\")'>✏️修改</span>";
-    html += "<div class='side-item'>" + editBtn +
+    var flashCls = D.lastField === k ? " side-flash" : "";
+    html += "<div class='side-item" + flashCls + "'>" + editBtn +
             "<div class='k'>" + label + "</div><div class='v'>" + esc(show) + "</div></div>";
   }
   KEY_FIELDS.forEach(function(k){ item(k, D.fields[k], FIELD_LABELS[k]); });
@@ -908,6 +923,11 @@ function renderSidebar() {
   });
   if (D.extra.length) item("extra", D.extra, "ℹ️ 其他");
   if (!has) html += "<div class='side-empty'>还没有填写内容<br>在左侧对话里告诉我吧</div>";
+  html += "<div class='side-meta'>UID " + esc(D.uid) +
+          (D.phase === "done" || D.phase === "shared" ? " · 已完成" : "") + "</div>";
+  html += "<div class='side-progress'><div class='fill' style='width:" +
+          Math.round(filled / total * 100) + "%'></div></div>" +
+          "<div class='side-meta'>完成度 " + filled + "/" + total + "</div>";
   if (!AI_ON && D.phase !== "shared") {
     html += "<div style='background:#1e293b;border:1px dashed var(--accent);border-radius:8px;padding:8px 10px;font-size:12px;color:#7dd3fc;margin-top:8px;'>" +
             "💡 开启 <b>AI 模式</b>(右上角⚙️)后:<br>· 说话不用标点,AI 按语义理解<br>" +
@@ -935,6 +955,7 @@ function editField(key) {
     D.fields[key] = v.split(/[,，、;；]/).map(function(s){return s.trim();}).filter(function(s){return s;});
   }
   save();
+  flashField(key);
   renderSidebar();
   addSys("✅ 「" + label + "」已更新为:" + v + "<br>继续在下方输入框补充其他内容,或点右上角完成");
 }
@@ -1130,7 +1151,7 @@ function handleRuleInput(text) {
         continue;
       }
       if (k === "birth") { D.extra.push(r.info[k] + "出生"); touched = true; continue; }
-      if (!D.fields[k] && r.info[k]) { D.fields[k] = r.info[k]; touched = true; }
+      if (!D.fields[k] && r.info[k]) { D.fields[k] = r.info[k]; touched = true; flashField(k); }
     }
     r.extra.forEach(function(e){
       if (D.extra.indexOf(e) < 0) { D.extra.push(e); touched = true; }
@@ -1171,6 +1192,7 @@ function handleRuleInput(text) {
               splitItems(text);
     D.fields[k] = val;
     D.deep_idx++;
+    flashField(k);
     save();
     askDeep();
   }
