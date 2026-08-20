@@ -60,7 +60,8 @@
     <button id="send">发送</button>
   </div>
 </div>
-
+<input type="file" id="fileImport" accept=".json" style="display:none"
+       onchange="importBackup(this.files[0]); this.value='';">
 <script>
 "use strict";
 /* =====================================================================
@@ -90,19 +91,29 @@ var DEEP_QUESTIONS = {
   self_eval:"用几句话评价一下自己(性格、优势、做事风格)"};
 
 /* ---------------- 状态 ---------------- */
-var D = {phase:"collect", fields:{}, extra:[], verify:[], adjustments:[],
+function genUID() {
+  var s = "";
+  var chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  for (var i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return "dpc-" + s;
+}
+var D = {phase:"collect", uid:genUID(), fields:{}, extra:[], verify:[], adjustments:[],
          deep_idx:0, verify_idx:0, pending_q:[]};
 
 function load() {
   try {
     var s = JSON.parse(localStorage.getItem("dpc_state_v1"));
-    if (s && s.phase) { D = s; return true; }
+    if (s && s.phase) {
+      if (!s.uid) s.uid = genUID();
+      D = s;
+      return true;
+    }
   } catch(e) {}
   return false;
 }
 function save() { try { localStorage.setItem("dpc_state_v1", JSON.stringify(D)); } catch(e) {} }
 function resetState() {
-  D = {phase:"collect", fields:{}, extra:[], verify:[], adjustments:[],
+  D = {phase:"collect", uid:genUID(), fields:{}, extra:[], verify:[], adjustments:[],
        deep_idx:0, verify_idx:0, pending_q:[]};
   save();
 }
@@ -435,6 +446,8 @@ function finish(forced) {
     "<strong>✅ 数码档案已生成!</strong><br><br>" +
     "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
     "<button class='btn ok' onclick='downloadResume()'>💾 下载 .md</button> " +
+    "<button class='btn' onclick='genShare()'>🔗 生成分享链接</button> " +
+    "<button class='btn ghost' onclick='exportBackup()'>📦 导出备份</button><br>" +
     "<button class='btn ghost' onclick='restart()'>🔄 重新开始</button><br><br>" +
     "<pre class='out'>" + esc(md) + "</pre>",
     "bot");
@@ -443,6 +456,100 @@ function restart() {
   resetState();
   addSys("已清空,重新开始");
   greet(); askKeyField();
+}
+
+/* ---------------- UID / 分享 / 备份 ---------------- */
+function b64encode(obj) {
+  var s = JSON.stringify(obj);
+  return btoa(unescape(encodeURIComponent(s)));
+}
+function b64decode(b) {
+  return JSON.parse(decodeURIComponent(escape(atob(b))));
+}
+function genShare() {
+  var payload = {
+    v: 3, uid: D.uid, ts: Date.now(),
+    fields: D.fields, extra: D.extra,
+    verify: D.verify, adjustments: D.adjustments,
+    score: finalScore(), level: levelOf(finalScore())
+  };
+  var link = location.origin + location.pathname + "?d=" + b64encode(payload);
+  addMsg("🔗 <strong>你的分享链接已生成!</strong><br><br>" +
+    "把下面的链接发给招聘方,对方打开就能看到你的档案和可信度核验报告:<br><br>" +
+    "<pre class='out' style='font-size:12px;word-break:break-all;'>" + esc(link) + "</pre><br>" +
+    "<button class='btn' onclick='copyText(\"" + link + "\")'>📋 复制链接</button>" +
+    "<br><span class='muted'>⚠️ 链接内含你的完整档案,请只发给信任的人。对方看到的是一次性只读快照。</span>",
+    "bot");
+}
+function copyText(t) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(function(){ addSys("✅ 已复制"); },
+      function(){ addSys("❌ 复制失败,请手动长按链接复制"); });
+  } else addSys("❌ 复制失败,请手动长按链接复制");
+}
+function exportBackup() {
+  var blob = new Blob(["\ufeff" + b64encode({uid:D.uid, state:D})],
+                      {type:"application/json;charset=utf-8"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "数码档案备份_" + D.uid + ".json";
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+  addSys("📦 备份文件已下载(含你的 UID 和全部档案数据),请妥善保存");
+}
+function importBackup(file) {
+  var reader = new FileReader();
+  reader.onload = function() {
+    try {
+      var data = JSON.parse(reader.result.replace(/^\ufeff/, ""));
+      var payload = typeof data.state === "object" ? data.state : data;
+      payload.uid = data.uid || payload.uid || genUID();
+      D = payload;
+      save();
+      addSys("✅ 备份已恢复(UID: " + D.uid + ")");
+      if (D.phase === "done") {
+        var md = buildResume();
+        addMsg("<strong>✅ 档案已恢复!</strong><br><br>" +
+          "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
+          "<button class='btn ok' onclick='downloadResume()'>💾 下载 .md</button> " +
+          "<button class='btn' onclick='genShare()'>🔗 生成分享链接</button><br><br>" +
+          "<pre class='out'>" + esc(md) + "</pre>", "bot");
+      } else {
+        greet(); askKeyField();
+      }
+    } catch(e) {
+      addSys("❌ 备份文件无法解析,请确认文件完整");
+    }
+  };
+  reader.readAsText(file);
+}
+/* 只读分享模式:链接带 ?d= 参数 */
+function showShared(payload) {
+  D.phase = "shared";
+  D.fields = payload.fields || {};
+  D.extra = payload.extra || [];
+  D.verify = payload.verify || [];
+  D.adjustments = payload.adjustments || [];
+  D.uid = payload.uid || "未知";
+  document.getElementById("inputbar").style.display = "none";
+  var f = D.fields, rows = "";
+  rows += "<tr><td>🏫 学校</td><td>"+esc(f.school||"-")+"</td></tr>";
+  rows += "<tr><td>📚 专业</td><td>"+esc(f.major||"-")+"</td></tr>";
+  rows += "<tr><td>🎓 入学年份</td><td>"+esc(f.enroll_year||"-")+"</td></tr>";
+  var sc = payload.score || finalScore(), lv = payload.level || levelOf(sc);
+  var md = buildResume();
+  addMsg(
+    "📥 <strong>这是他人分享的数码档案(只读)</strong><br>" +
+    "<span class='muted'>来源 UID: " + esc(D.uid) + " · 分享时间:" +
+    new Date(payload.ts || Date.now()).toLocaleString() + "</span><br><br>" +
+    "<table class='table'>" + rows + "</table>" +
+    "<div class='badge'><div class='score'>" + sc + "/100</div>" +
+    "<div class='bar'>" + "█".repeat(Math.floor(sc/10)) + "░".repeat(10-Math.floor(sc/10)) + "</div>" +
+    "等级:<strong>" + lv + "</strong> · 核验 " + D.verify.length + " 题<br>" +
+    "<span class='muted'>由「数码档案创建器」AI 验证引擎生成</span></div>" +
+    "<pre class='out'>" + esc(md) + "</pre>" +
+    "<br><button class='btn ghost' onclick='copyText(\"" + genShareUrl() + "\")'>📋 转发此链接</button>",
+    "bot");
 }
 
 /* ---------------- 输入处理 ---------------- */
@@ -529,26 +636,43 @@ function handleInput(text) {
 }
 
 /* ---------------- 启动 ---------------- */
+function genShareUrl() { return location.href; }
 var input = document.getElementById("input");
 document.getElementById("send").addEventListener("click", function(){
   handleInput(input.value); input.value = "";
 });
 input.addEventListener("keydown", function(e){ if (e.key === "Enter") { handleInput(input.value); input.value = ""; } });
 
-if (load() && D.phase === "done") {
-  addMsg("欢迎回来!你已有一份完成的档案 ✅<br>" +
-         "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
-         "<button class='btn ghost' onclick='restart()'>🔄 重新开始</button>", "bot");
-} else if (load() && D.phase !== "collect") {
-  addMsg("欢迎回来!继续你的档案 📋", "bot");
-  if (D.phase === "deep") askDeep();
-  else if (D.phase === "verify") { D.pending_q = genVerifyQuestions(); askVerify(); }
-  else if (D.phase === "review") showReview();
-} else {
-  resetState();
-  greet();
-  askKeyField();
-}
+// 只读分享模式:链接带 ?d= 参数(优先于本地状态)
+(function(){
+  var m = location.search.match(/[?&]d=([^&]+)/);
+  if (m) {
+    try {
+      var payload = b64decode(decodeURIComponent(m[1]));
+      resetState();
+      showShared(payload);
+      return;
+    } catch(e) {
+      addSys("⚠️ 分享链接无效或已损坏,请向分享者确认链接完整");
+    }
+  }
+  if (load() && D.phase === "done") {
+    addMsg("欢迎回来!你已有一份完成的档案 ✅<br>" +
+           "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
+           "<button class='btn' onclick='genShare()'>🔗 生成分享链接</button> " +
+           "<button class='btn' onclick='exportBackup()'>📦 导出备份</button><br>" +
+           "<button class='btn ghost' onclick='restart()'>🔄 重新开始</button>", "bot");
+  } else if (load() && D.phase !== "collect") {
+    addMsg("欢迎回来!继续你的档案 📋", "bot");
+    if (D.phase === "deep") askDeep();
+    else if (D.phase === "verify") { D.pending_q = genVerifyQuestions(); askVerify(); }
+    else if (D.phase === "review") showReview();
+  } else {
+    resetState();
+    greet();
+    askKeyField();
+  }
+})();
 </script>
 </body>
 </html>
