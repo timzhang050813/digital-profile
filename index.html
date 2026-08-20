@@ -585,6 +585,54 @@ function handleCorrection(text) {
   }
   return changed;
 }
+/* 查看当前已填内容 */
+function showCurrent() {
+  var rows = "";
+  KEY_FIELDS.forEach(function(k){
+    var v = D.fields[k];
+    if (v) rows += "<tr><td>" + FIELD_LABELS[k] + "</td><td>" + esc(v) + "</td></tr>";
+  });
+  OPTIONAL_FIELDS.forEach(function(k){
+    var v = D.fields[k];
+    if (v && v.length) rows += "<tr><td>" + OPTIONAL_EMOJI[k] + " " + OPTIONAL_LABELS[k] +
+      "</td><td>" + esc(v.join("、")) + "</td></tr>";
+  });
+  if (D.extra.length) rows += "<tr><td>ℹ️ 其他</td><td>" + esc(D.extra.join("、")) + "</td></tr>";
+  addMsg(
+    "<strong>📋 你目前已填的内容:</strong><br>" +
+    (rows ? "<table class='table'>" + rows + "</table>" : "<p class='muted'>目前还没有填写任何内容</p>") +
+    "<br><span class='muted'>要修改哪一项,直接说,例如:</span><br>" +
+    "「<strong>修改学校为复旦大学</strong>」<br>" +
+    "「<strong>技能改成 Python、C语言</strong>」<br>" +
+    "「<strong>公司名字写错了,叫XXX</strong>」(自动更正)<br>" +
+    "或「<strong>从头开始</strong>」重新填写",
+    "bot");
+}
+/* 修改指令:修改XX为YY / XX改成YY / 把XX换为YY */
+var FIELD_ALIAS = {
+  "学校": "school", "专业": "major", "入学年份": "enroll_year", "年份": "enroll_year",
+  "课程": "courses", "技能": "skills", "项目": "experience", "经历": "experience",
+  "社团": "campus_activities", "校园": "campus_activities", "证书": "certificates",
+  "获奖": "awards", "荣誉": "awards", "求职意向": "career_intent", "意向": "career_intent",
+  "自我评价": "self_eval", "评价": "self_eval", "爱好": "extra", "其他": "extra"
+};
+function modifyField(text) {
+  var m = text.match(/(?:把|将)?([\u4e00-\u9fa5]{2,8}?)(?:修改为|修改成|改为|改成|换成|更新为|更正为)\s*(.+)/)
+       || text.match(/^(?:我要|我想|请|帮我)?(?:修改|改)\s*([\u4e00-\u9fa5]{2,8}?)\s*(?:为|成|是)\s*(.+)/);
+  if (!m) return false;
+  var fname = m[1].replace(/[的了]?$/, "");
+  var field = FIELD_ALIAS[fname];
+  var val = m[2].trim().replace(/[。.！!?？,，;；]$/, "");
+  if (!field || !val) return false;
+  if (KEY_FIELDS.indexOf(field) >= 0) {
+    D.fields[field] = val;
+  } else if (OPTIONAL_FIELDS.indexOf(field) >= 0) {
+    D.fields[field] = val.split(/[,，、;；]/).map(function(s){return s.trim();}).filter(function(s){return s;});
+  } else if (field === "extra") {
+    D.extra.push(val);
+  }
+  return true;
+}
 function handleInput(text) {
   text = String(text||"").trim();
   if (!text) return;
@@ -594,6 +642,32 @@ function handleInput(text) {
       handleCorrection(text)) {
     save();
     addSys("✅ 已更正!之前的表述已更新(如还有其他要改的,直接说)");
+    return;
+  }
+  // 指令:从头开始(单独说时才执行,避免误伤"重来或者查看"这类)
+  if (/(从头开始|重新填写|重新开始|重来|清空|重置)/.test(text) &&
+      !/(或者|或|还是)/.test(text)) {
+    resetState();
+    addSys("🔄 已清空,从头开始填写");
+    greet(); askKeyField();
+    return;
+  }
+  // 指令:查看已填内容
+  if (/(查看|调出|调出来|展示|看看|显示|列出来)/.test(text) &&
+      /(档案|信息|内容|资料|简历|情况|填写|修改)/.test(text)) {
+    showCurrent();
+    return;
+  }
+  // 指令:具体修改(修改学校为XX / 技能改成XX)
+  if (modifyField(text)) {
+    save();
+    addSys("✅ 已修改!");
+    showCurrent();
+    return;
+  }
+  // 指令:泛修改请求 → 展示清单
+  if (/(修改|更改|改一下|我想改|我要改|编辑|改错)/.test(text)) {
+    showCurrent();
     return;
   }
   if (D.phase === "collect") {
