@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1e3a5f">
+<title>数码档案创建器</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --accent:#38bdf8; --accent2:#818cf8;
+          --ok:#34d399; --warn:#fbbf24; --bad:#f87171; --text:#e2e8f0; --muted:#94a3b8; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); min-height:100vh; }
+  header { background:linear-gradient(135deg,#1e3a5f,#312e81); padding:18px 16px;
+           text-align:center; position:sticky; top:0; z-index:10; box-shadow:0 2px 12px rgba(0,0,0,.4); }
+  header h1 { font-size:19px; letter-spacing:1px; }
+  header p { font-size:12px; color:#a5b4fc; margin-top:4px; }
+  #chat { max-width:640px; margin:0 auto; padding:14px 12px 90px; }
+  .msg { max-width:88%; padding:10px 13px; border-radius:14px; margin-bottom:10px;
+         font-size:15px; line-height:1.6; animation:fadeIn .25s ease; word-break:break-word; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+  .bot { background:var(--card); border-top-left-radius:4px; margin-right:auto; }
+  .user { background:linear-gradient(135deg,#2563eb,#4f46e5); border-top-right-radius:4px; margin-left:auto; }
+  .bot .tag { display:inline-block; font-size:11px; color:#7dd3fc; margin-bottom:4px; }
+  .sys { text-align:center; font-size:12px; color:var(--muted); margin:12px 0; }
+  .btn { display:inline-block; background:var(--accent); color:#0f172a; border:none;
+         border-radius:10px; padding:9px 18px; font-size:14px; font-weight:600; cursor:pointer;
+         margin:6px 6px 0 0; }
+  .btn.ghost { background:transparent; border:1px solid var(--accent); color:var(--accent); }
+  .btn.ok { background:var(--ok); } .btn.warn { background:var(--warn); color:#0f172a; }
+  .badge { background:var(--card); border:1px solid #334155; border-radius:14px; padding:14px;
+           margin:10px 0; }
+  .badge .score { font-size:30px; font-weight:800; color:var(--ok); }
+  .badge .bar { font-size:18px; letter-spacing:1px; color:var(--accent); margin:4px 0; }
+  .table { width:100%; border-collapse:collapse; margin:8px 0; font-size:13.5px; }
+  .table td, .table th { border:1px solid #334155; padding:6px 8px; text-align:left; }
+  .table th { background:#24344d; }
+  .warn-text { color:var(--warn); } .bad-text { color:var(--bad); } .ok-text { color:var(--ok); }
+  #inputbar { position:fixed; bottom:0; left:0; right:0; background:var(--bg);
+              border-top:1px solid #1e293b; padding:10px 12px calc(10px + env(safe-area-inset-bottom)); }
+  #inputbar .wrap { max-width:640px; margin:0 auto; display:flex; gap:8px; }
+  #input { flex:1; background:var(--card); color:var(--text); border:1px solid #334155;
+           border-radius:22px; padding:10px 16px; font-size:15px; outline:none; }
+  #send { background:var(--accent); color:#0f172a; border:none; border-radius:22px;
+          padding:10px 22px; font-size:15px; font-weight:700; }
+  pre.out { background:#0b1120; border:1px solid #334155; border-radius:10px; padding:12px;
+            font-size:12.5px; white-space:pre-wrap; max-height:280px; overflow:auto; }
+  .muted { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📋 数码档案创建器</h1>
+  <p>对话式建档 · AI 可信度核验 · 简历式输出</p>
+</header>
+<div id="chat"></div>
+<div id="inputbar">
+  <div class="wrap">
+    <input id="input" type="text" placeholder="输入你的信息…(手机键盘 Enter 发送)" autocomplete="off">
+    <button id="send">发送</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+ * 数码档案创建器 · 单文件网页版 (v1.5.0)
+ * 移植自 Hermes 插件 digital-profile-creator
+ * 对话式建档 → 反问深挖 → 侦查式核验 → 可信度徽章 → 简历式导出
+ * 数据保存在本机浏览器 (localStorage),不上传任何服务器
+ * ===================================================================== */
+
+var KEY_FIELDS = ["school","major","enroll_year"];
+var FIELD_LABELS = {school:"学校", major:"专业", enroll_year:"入学年份"};
+var OPTIONAL_FIELDS = ["courses","skills","experience","campus_activities",
+                       "certificates","awards","career_intent","self_eval"];
+var OPTIONAL_LABELS = {courses:"主修课程", skills:"技能特长", experience:"实习/项目经历",
+  campus_activities:"校园经历/社团活动", certificates:"证书", awards:"获奖/荣誉",
+  career_intent:"求职意向", self_eval:"自我评价"};
+var OPTIONAL_EMOJI = {courses:"📖", skills:"🛠️", experience:"💼",
+  campus_activities:"🏫", certificates:"📜", awards:"🏆", career_intent:"🎯", self_eval:"💡"};
+var DEEP_QUESTIONS = {
+  courses:"你大学主要学了哪些课程?(如 量子力学、电动力学…用顿号或逗号分隔)",
+  skills:"你有哪些技能特长?(编程语言、软件工具、语言能力…)",
+  experience:"有没有实习或项目经历?(项目名称、你的角色、成果)",
+  campus_activities:"参加过什么社团/学生会/实验室/志愿活动吗?",
+  certificates:"考过哪些证书?(四六级、普通话、计算机等级…)",
+  awards:"拿过什么奖学金、竞赛奖项或荣誉?",
+  career_intent:"求职意向是什么?(目标岗位、期望城市、行业偏好)",
+  self_eval:"用几句话评价一下自己(性格、优势、做事风格)"};
+
+/* ---------------- 状态 ---------------- */
+var D = {phase:"collect", fields:{}, extra:[], verify:[], adjustments:[],
+         deep_idx:0, verify_idx:0, pending_q:[]};
+
+function load() {
+  try {
+    var s = JSON.parse(localStorage.getItem("dpc_state_v1"));
+    if (s && s.phase) { D = s; return true; }
+  } catch(e) {}
+  return false;
+}
+function save() { try { localStorage.setItem("dpc_state_v1", JSON.stringify(D)); } catch(e) {} }
+function resetState() {
+  D = {phase:"collect", fields:{}, extra:[], verify:[], adjustments:[],
+       deep_idx:0, verify_idx:0, pending_q:[]};
+  save();
+}
+
+/* ---------------- 聊天 UI ---------------- */
+var chat = document.getElementById("chat");
+function addMsg(text, who) {
+  var d = document.createElement("div");
+  d.className = "msg " + who;
+  d.innerHTML = text;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  window.scrollTo(0, document.body.scrollHeight);
+}
+function addSys(text) {
+  var d = document.createElement("div");
+  d.className = "sys";
+  d.textContent = text;
+  chat.appendChild(d);
+}
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+/* ---------------- 提取规则 ---------------- */
+function pickYear(t) {
+  var m = t.match(/(19|20)\d{2}/);
+  return m ? m[0] : "";
+}
+function extractInfo(text) {
+  var info = {}, extra = [];
+  var m;
+  // 学校
+  m = text.match(/([\u4e00-\u9fa5A-Za-z]{2,20}?)(?:大学|学院)/);
+  if (m) {
+    var sch = m[0].replace(/^(我是|我在|就读于|来自|毕业于|在)/, "");
+    if (/(大学|学院)$/.test(sch) && sch.length >= 4) info.school = sch;
+  }
+  // 入学年份: XX级 / XX年入学
+  m = text.match(/(20\d{2})\s*级/) || text.match(/(20\d{2})\s*年(?:入学|进入|就读|开始)/);
+  if (m) info.enroll_year = m[1];
+  // 毕业
+  m = text.match(/(20\d{2})\s*年[^,，。;；\n]*?(?:毕业|毕业于)/);
+  if (m) info.grad_year = m[1];
+  // 专业: XX专业 / 物理系XX
+  m = text.match(/(?:系|学院)?([\u4e00-\u9fa5A-Za-z·]{2,12}?专业)/);
+  if (m) {
+    var majorRaw = m[1].replace(/专业$/, "").trim();
+    majorRaw = majorRaw.replace(/^(我是|我在|就读于|毕业于|来自)/, "");
+    var schoolName = info.school || "";
+    if (schoolName && majorRaw.indexOf(schoolName) === 0) {
+      majorRaw = majorRaw.slice(schoolName.length);
+    }
+    if (majorRaw.length >= 2) info.major = majorRaw;
+  }
+  // 出生
+  m = text.match(/((?:19|20)\d{2})\s*年\s*\d{1,2}\s*月?(?:出生|生)?/);
+  if (m && /出生|生/.test(text)) info.birth = m[1] + "年";
+  // 老家/来自
+  m = text.match(/(?:老家|来自|家乡)[在是:]?\s*([\u4e00-\u9fa5]{2,10})/);
+  if (m) extra.push("老家在" + m[1]);
+  // 爱好
+  m = text.match(/爱好[是:：]?\s*([^。；;，,]+)/);
+  if (m) extra.push("爱好:" + m[1].trim());
+  // 其他:剩余的句子(包含"编号"等具体信息)
+  var sentences = text.split(/[。；;!?\n]/).filter(function(s){return s.trim().length > 2;});
+  for (var i = 0; i < sentences.length; i++) {
+    var s = sentences[i].trim();
+    var used = (s.indexOf("大学") >= 0 || s.indexOf("专业") >= 0 ||
+                s.indexOf("级") >= 0 || s.indexOf("毕业") >= 0 ||
+                s.indexOf("出生") >= 0 || s.indexOf("老家") >= 0 ||
+                s.indexOf("来自") >= 0 || s.indexOf("爱好") >= 0);
+    if (!used && /[0-9\u4e00-\u9fa5]/.test(s) && extra.indexOf(s) < 0) {
+      extra.push(s);
+    }
+  }
+  return {info: info, extra: extra};
+}
+
+/* ---------------- 评分 ---------------- */
+function parseYear(v) { var m = String(v||"").match(/(19|20)\d{2}/); return m?parseInt(m[0]):null; }
+function baseScore() {
+  var score = 100, reasons = [];
+  var birthY = null, gradY = null;
+  for (var i=0;i<D.extra.length;i++){
+    var m = String(D.extra[i]).match(/((?:19|20)\d{2})年[^毕]*?(?:出生|生)/);
+    if (m && birthY===null) birthY = parseInt(m[1]);
+    m = String(D.extra[i]).match(/((?:19|20)\d{2})年(?:毕业于|毕业)/);
+    if (m && gradY===null) gradY = parseInt(m[1]);
+  }
+  var enrollY = parseYear(D.fields.enroll_year);
+  if (birthY && gradY) {
+    var age = gradY - birthY;
+    if (age < 15) { score -= 20; reasons.push("出生/毕业矛盾:毕业时仅"+age+"岁"); }
+    else if (age < 18) { score -= 10; reasons.push("毕业年龄偏小("+age+"岁)"); }
+  }
+  if (birthY && enrollY) {
+    var age2 = enrollY - birthY;
+    if (age2 < 15) { score -= 20; reasons.push("入学年龄异常("+age2+"岁)"); }
+    else if (age2 > 45) { score -= 10; reasons.push("入学年龄偏大("+age2+"岁)"); }
+  }
+  if (gradY && enrollY) {
+    if (gradY < enrollY) { score -= 15; reasons.push("毕业早于入学,时间线冲突"); }
+    else if (gradY - enrollY > 6) { score -= 5; reasons.push("学制异常(间隔"+(gradY-enrollY)+"年)"); }
+  }
+  for (var k=0;k<KEY_FIELDS.length;k++){
+    if (!D.fields[KEY_FIELDS[k]]) { score -= 10; reasons.push("缺"+FIELD_LABELS[KEY_FIELDS[k]]); }
+  }
+  if ((D.fields.courses||[]).length >= 5) { score += 5; reasons.push("课程具体("+D.fields.courses.length+"门)+5"); }
+  if (D.fields.experience && D.fields.experience.length) { score += 5; reasons.push("有项目经历+5"); }
+  if (D.fields.certificates && D.fields.certificates.length) { score += 3; reasons.push("有证书+3"); }
+  if (D.fields.awards && D.fields.awards.length) { score += 3; reasons.push("有获奖+3"); }
+  if (D.fields.campus_activities && D.fields.campus_activities.length) { score += 3; reasons.push("有校园经历+3"); }
+  if ((D.fields.self_eval||[]).join("").length >= 30) { score += 2; reasons.push("自我评价详尽+2"); }
+  var all = JSON.stringify(D.fields) + " " + D.extra.join(" ");
+  ["测试","随便填","假的","虚构","编的"].forEach(function(w){
+    if (all.indexOf(w) >= 0) { score -= 25; reasons.push("可疑词'"+w+"'-25"); }
+  });
+  return {score: Math.max(0, Math.min(100, score)), reasons: reasons};
+}
+function levelOf(s) { return s>=85?"高可信":s>=70?"基本可信":s>=50?"存疑":"高度存疑"; }
+function finalScore() {
+  var b = baseScore().score;
+  var adj = D.adjustments.reduce(function(a,x){return a+x;}, 0);
+  return Math.max(0, Math.min(100, b + adj));
+}
+
+/* ---------------- 核验问题 ---------------- */
+function genVerifyQuestions() {
+  var qs = [];
+  if (D.fields.school && D.fields.major) {
+    qs.push({id:qs.length, text:"你所在的"+D.fields.school+"是哪个学院?辅导员(或班主任)姓什么?在哪个校区上课?"});
+  }
+  if (D.fields.experience && D.fields.experience.length) {
+    qs.push({id:qs.length, text:"你的项目:GitHub仓库名或账号是什么?用一句话介绍核心创新点?"});
+    if (D.fields.experience.join("").indexOf("专利") >= 0) {
+      qs.push({id:qs.length, text:"你的专利代理机构(或代理律师)是哪个所?印象最深的技术方案是什么?"});
+    }
+  }
+  var aw = (D.fields.awards||[]).join("");
+  if (aw.indexOf("机器人") >= 0) qs.push({id:qs.length, text:"全国机器人比赛全称和主办方?队伍几个人、分工?"});
+  if (aw.indexOf("奖学金") >= 0) qs.push({id:qs.length, text:"一等奖学金是哪个类别(综合/学业)?金额大概多少?"});
+  if (D.fields.certificates && D.fields.certificates.length) qs.push({id:qs.length, text:"英语四级考了多少分?哪一年考的?"});
+  if (qs.length < 2) qs.push({id:qs.length, text:"用三句话向朋友介绍你自己?(用你自己的口吻)"});
+  return qs.slice(0, 6);
+}
+/* 规则化语境分析:长度/细节/常识 */
+function analyzeAnswer(text, q) {
+  var s = String(text||"");
+  var signals = {specificity:2, naturalness:3, consistency:3, plausibility:3, evasiveness:0};
+  if (s.length >= 12) signals.specificity = 4;
+  if (s.length >= 25) signals.specificity = 5;
+  if (/[0-9]/.test(s) && s.length >= 10) signals.naturalness = 4;
+  if (s.indexOf("不知道") >= 0 || s.indexOf("记不清") >= 0) signals.naturalness = 5;
+  if (s.length < 5) { signals.specificity = 1; signals.evasiveness = 4; }
+  // 四级常识检查
+  if (q && q.text.indexOf("四级") >= 0) {
+    var m = s.match(/(\d{3})分/);
+    if (m) {
+      var sc = parseInt(m[1]);
+      if (sc >= 425) { signals.plausibility = 5; signals.consistency = 5; }
+      else { signals.plausibility = 1; signals.consistency = 1; }
+    }
+  }
+  // 专利/交底书关键词交叉
+  if (q && q.text.indexOf("印象最深") >= 0) {
+    var bad = ["向量数据库","人工智能","区块链","元宇宙"];
+    var hit = bad.filter(function(w){return s.indexOf(w)>=0;});
+    if (hit.length) { signals.consistency = Math.min(signals.consistency, 1); signals.plausibility = 2; }
+    if (s.indexOf("数据库") >= 0) {
+      signals.consistency = Math.max(signals.consistency, 4);
+      signals.plausibility = Math.max(signals.plausibility, 4);
+    }
+  }
+  var avg = (signals.specificity + signals.naturalness + signals.consistency + signals.plausibility) / 4;
+  var adj;
+  if (avg >= 4.5) adj = 8; else if (avg >= 3.5) adj = 5; else if (avg >= 2.5) adj = 0;
+  else if (avg >= 1.5) adj = -6; else adj = -10;
+  adj = Math.max(-15, Math.min(10, adj - signals.evasiveness));
+  var note = "语境分析[具体性"+Math.round(signals.specificity/5*100)+"%、自然度"+
+    Math.round(signals.naturalness/5*100)+"%、一致性"+Math.round(signals.consistency/5*100)+"%、合理性"+
+    Math.round(signals.plausibility/5*100)+"%、回避度"+Math.round(signals.evasiveness/5*100)+"%]";
+  if (avg >= 4) note += "→回答具体自然,可信度高";
+  else if (avg >= 3) note += "→基本合理";
+  else if (avg >= 2) note += "→较为含糊";
+  else note += "→空洞/回避,高度存疑";
+  return {adj: adj, note: note, signals: signals};
+}
+
+/* ---------------- 简历输出 ---------------- */
+function buildResume() {
+  var f = D.fields, L = [];
+  var sc = finalScore(), lv = levelOf(sc);
+  var bar = "█".repeat(Math.floor(sc/10)) + "░".repeat(10 - Math.floor(sc/10));
+  L.push("# 📋 数码档案(已确认草稿)");
+  L.push(""); L.push("## 🛡️ 可信度徽章"); L.push("");
+  L.push("> **可信度: " + sc + "/100 · " + lv + "**");
+  L.push("> `" + bar + "`");
+  L.push("> 核验进度:已答 " + D.verify.length + "/" + D.pending_q.length + " 题");
+  L.push("> 评分说明:由「数码档案创建器」AI 验证引擎基于常识规则与对话核验自动生成,仅供参考。");
+  L.push(""); L.push("- 状态:✅ 已确认");
+  L.push(""); L.push("## 🎓 教育背景"); L.push("");
+  L.push("| 学校 | 专业 | 入学年份 |"); L.push("| --- | --- | --- |");
+  L.push("| " + (f.school||"") + " | " + (f.major||"") + " | " + (f.enroll_year||"") + " |");
+  OPTIONAL_FIELDS.forEach(function(k){
+    L.push(""); L.push("## " + OPTIONAL_EMOJI[k] + " " + OPTIONAL_LABELS[k]); L.push("");
+    var v = f[k] || [];
+    if (v.length) v.forEach(function(x){L.push("- " + x);});
+    else L.push("- (未提供)");
+  });
+  L.push(""); L.push("## ℹ️ 其他信息");
+  if (D.extra.length) D.extra.forEach(function(x){L.push("- " + x);});
+  else L.push("- (无)");
+  L.push(""); L.push("## 🔍 可信度核验记录"); L.push("");
+  var b = baseScore();
+  L.push("- 规则评分明细:");
+  if (b.reasons.length) b.reasons.forEach(function(r){L.push("  - " + r);});
+  else L.push("  - 无扣分/加分项");
+  L.push("- 问答核验(" + D.verify.length + "/" + D.pending_q.length + "):");
+  if (D.verify.length) D.verify.forEach(function(v){
+    L.push("  - Q" + (v.id+1) + ": " + String(v.text).slice(0,38) + "… → 调整 " + v.adj + " 分");
+    L.push("    - " + v.note);
+  });
+  else L.push("  - (未进行问答核验)");
+  L.push("- 最终可信度: " + sc + "/100 (" + lv + ")");
+  return L.join("\n");
+}
+function downloadResume() {
+  var text = buildResume();
+  var blob = new Blob(["\ufeff" + text], {type:"text/markdown;charset=utf-8"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "数码档案.md";
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){URL.revokeObjectURL(a.href);}, 1000);
+}
+function copyResume() {
+  var text = buildResume();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function(){
+      addSys("✅ 已复制到剪贴板,可粘贴到微信/备忘录");
+    }, function(){ fallbackCopy(text); });
+  } else fallbackCopy(text);
+}
+function fallbackCopy(text) {
+  var ta = document.createElement("textarea");
+  ta.value = text; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); addSys("✅ 已复制到剪贴板"); } catch(e) {}
+  document.body.removeChild(ta);
+}
+
+/* ---------------- 流程 ---------------- */
+function greet() {
+  addMsg("你好!我是<strong>数码档案创建器</strong> 📋<br>用对话的方式帮你创建一份经得起核验的数码简历。<br><br>" +
+    "先介绍一下自己吧,比如:<br><span class='muted'>「我是上海大学理论物理专业2022级的学生,老家在杭州…」</span>",
+    "bot");
+}
+function askKeyField() {
+  var miss = KEY_FIELDS.filter(function(k){return !D.fields[k];});
+  if (!miss.length) {
+    D.phase = "deep"; D.deep_idx = 0; save();
+    return askDeep();
+  }
+  var q = {school:"你所在的学校是?", major:"你的专业是?", enroll_year:"你的入学年份是?(如 2022)"}[miss[0]];
+  addMsg(q, "bot");
+}
+function askDeep() {
+  while (D.deep_idx < OPTIONAL_FIELDS.length) {
+    var k = OPTIONAL_FIELDS[D.deep_idx];
+    if (!D.fields[k] || !D.fields[k].length) {
+      addMsg(OPTIONAL_EMOJI[k] + " " + DEEP_QUESTIONS[k] +
+             "<br><span class='muted'>没有的话回复「没有」即可,我们继续下一项</span>", "bot");
+      return;
+    }
+    D.deep_idx++;
+  }
+  D.phase = "verify";
+  D.pending_q = genVerifyQuestions();
+  D.verify_idx = 0;
+  save();
+  addSys("✅ 基本信息收集完毕,进入可信度核验环节 🔍");
+  askVerify();
+}
+function askVerify() {
+  if (D.verify_idx >= D.pending_q.length) {
+    D.phase = "review"; save();
+    showReview();
+    return;
+  }
+  var q = D.pending_q[D.verify_idx];
+  addMsg("🔍 核验题 " + (D.verify_idx+1) + "/" + D.pending_q.length +
+         "<br>" + esc(q.text) + "<br><span class='muted'>这些细节只有真实经历者才答得上来,如实回答即可</span>", "bot");
+}
+function showReview() {
+  var f = D.fields, rows = "";
+  rows += "<tr><td>🏫 学校</td><td>"+esc(f.school||"-")+"</td></tr>";
+  rows += "<tr><td>📚 专业</td><td>"+esc(f.major||"-")+"</td></tr>";
+  rows += "<tr><td>🎓 入学年份</td><td>"+esc(f.enroll_year||"-")+"</td></tr>";
+  var sc = finalScore(), lv = levelOf(sc);
+  addMsg(
+    "<strong>🎉 档案信息已收集完成!</strong><br><br>" +
+    "<table class='table'>" + rows + "</table>" +
+    "<div class='badge'><div class='score'>" + sc + "/100</div>" +
+    "<div class='bar'>" + "█".repeat(Math.floor(sc/10)) + "░".repeat(10-Math.floor(sc/10)) + "</div>" +
+    "等级:<strong>" + lv + "</strong> · 核验 " + D.verify.length + "/" + D.pending_q.length + " 题<br>" +
+    "<span class='muted'>AI 验证引擎基于常识规则与对话核验自动评分</span></div>" +
+    "<button class='btn ok' onclick='doConfirm()'>✅ 确认成稿</button> " +
+    "<button class='btn ghost' onclick='copyResume()'>📋 预览/复制</button> " +
+    "<button class='btn ghost' onclick='downloadResume()'>💾 下载</button>",
+    "bot");
+}
+function doConfirm() {
+  if (D.verify.length < D.pending_q.length) {
+    addMsg("⛔ 还有 " + (D.pending_q.length - D.verify.length) +
+           " 题核验未完成,完成核验后档案才更有说服力。<br>若坚持直接确认,点下方按钮(草稿将标注未完成核验):<br>" +
+           "<button class='btn warn' onclick='forceConfirm()'>强制确认</button>", "bot");
+    return;
+  }
+  finish();
+}
+function forceConfirm() { finish(true); }
+function finish(forced) {
+  D.phase = "done"; save();
+  var md = buildResume();
+  addMsg(
+    "<strong>✅ 数码档案已生成!</strong><br><br>" +
+    "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
+    "<button class='btn ok' onclick='downloadResume()'>💾 下载 .md</button> " +
+    "<button class='btn ghost' onclick='restart()'>🔄 重新开始</button><br><br>" +
+    "<pre class='out'>" + esc(md) + "</pre>",
+    "bot");
+}
+function restart() {
+  resetState();
+  addSys("已清空,重新开始");
+  greet(); askKeyField();
+}
+
+/* ---------------- 输入处理 ---------------- */
+function handleInput(text) {
+  text = String(text||"").trim();
+  if (!text) return;
+  addMsg(esc(text), "user");
+  if (D.phase === "collect") {
+    var r = extractInfo(text);
+    var touched = false;
+    for (var k in r.info) {
+      if (k === "grad_year") {
+        if (r.info[k] && D.extra.indexOf("" + r.info[k] + "年本科毕业") < 0) {
+          D.extra.push(r.info[k] + "年本科毕业");
+          touched = true;
+        }
+        continue;
+      }
+      if (k === "birth") { D.extra.push(r.info[k] + "出生"); touched = true; continue; }
+      if (!D.fields[k] && r.info[k]) { D.fields[k] = r.info[k]; touched = true; }
+    }
+    r.extra.forEach(function(e){
+      if (D.extra.indexOf(e) < 0) { D.extra.push(e); touched = true; }
+    });
+    if (touched) addSys("✅ 已记录");
+    save();
+    askKeyField();
+  }
+  else if (D.phase === "deep") {
+    var k = OPTIONAL_FIELDS[D.deep_idx];
+    var val = (text === "没有" || text === "无" || text === "无没有" || text === "没") ? [] :
+              text.split(/[,，、;；]/).map(function(s){return s.trim();}).filter(function(s){return s.length>0;});
+    D.fields[k] = val;
+    D.deep_idx++;
+    save();
+    askDeep();
+  }
+  else if (D.phase === "verify") {
+    if (D.verify_idx >= D.pending_q.length) { showReview(); return; }
+    var q = D.pending_q[D.verify_idx];
+    var a = analyzeAnswer(text, q);
+    D.verify.push({id:q.id, text:q.text, adj:a.adj, note:a.note});
+    D.adjustments.push(a.adj);
+    D.verify_idx++;
+    save();
+    var sign = a.adj > 0 ? "✅ 回答良好 +" + a.adj : a.adj < 0 ? "⚠️ 存疑 " + a.adj : "➖ 中性 " + a.adj;
+    addSys("🔍 语境分析: " + sign + " 分<br><span class='muted'>" + esc(a.note) + "</span>");
+    askVerify();
+  }
+  else if (D.phase === "review") {
+    if (text.indexOf("确认") >= 0 || text.indexOf("没问题") >= 0) { doConfirm(); }
+    else if (text.indexOf("重新") >= 0) { restart(); }
+    else { addMsg("回复「确认」生成档案,或「重新开始」重来 😊", "bot"); }
+  }
+  else if (D.phase === "done") {
+    addMsg("档案已生成,可用上方按钮复制/下载。<br>回复「重新开始」可创建新档案。", "bot");
+  }
+}
+
+/* ---------------- 启动 ---------------- */
+var input = document.getElementById("input");
+document.getElementById("send").addEventListener("click", function(){
+  handleInput(input.value); input.value = "";
+});
+input.addEventListener("keydown", function(e){ if (e.key === "Enter") { handleInput(input.value); input.value = ""; } });
+
+if (load() && D.phase === "done") {
+  addMsg("欢迎回来!你已有一份完成的档案 ✅<br>" +
+         "<button class='btn' onclick='copyResume()'>📋 复制全文</button> " +
+         "<button class='btn ghost' onclick='restart()'>🔄 重新开始</button>", "bot");
+} else if (load() && D.phase !== "collect") {
+  addMsg("欢迎回来!继续你的档案 📋", "bot");
+  if (D.phase === "deep") askDeep();
+  else if (D.phase === "verify") { D.pending_q = genVerifyQuestions(); askVerify(); }
+  else if (D.phase === "review") showReview();
+} else {
+  resetState();
+  greet();
+  askKeyField();
+}
+</script>
+</body>
+</html>
