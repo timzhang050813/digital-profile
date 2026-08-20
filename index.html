@@ -141,9 +141,13 @@ function extractInfo(text) {
     var sch = m[0].replace(/^(我是|我在|就读于|来自|毕业于|在)/, "");
     if (/(大学|学院)$/.test(sch) && sch.length >= 4) info.school = sch;
   }
-  // 入学年份: XX级 / XX年入学
+  // 入学年份: XX级 / XX年入学 / 简短年份回答(2022、2022年)
   m = text.match(/(20\d{2})\s*级/) || text.match(/(20\d{2})\s*年(?:入学|进入|就读|开始)/);
   if (m) info.enroll_year = m[1];
+  else if (text.length <= 20) {
+    var y2 = text.match(/((?:19|20)\d{2})/);
+    if (y2 && !/(专业|大学|学院|出生|毕业|工作)/.test(text)) info.enroll_year = y2[1];
+  }
   // 毕业
   m = text.match(/(20\d{2})\s*年[^,，。;；\n]*?(?:毕业|毕业于)/);
   if (m) info.grad_year = m[1];
@@ -463,6 +467,32 @@ function handleInput(text) {
     r.extra.forEach(function(e){
       if (D.extra.indexOf(e) < 0) { D.extra.push(e); touched = true; }
     });
+    // 追问兜底:简短回答(如"2022年"、"理论物理"、"上海大学")直接填入缺失字段
+    // 注意:不依赖 touched(因为短回答可能被误收进 extra)
+    var miss = KEY_FIELDS.filter(function(k){return !D.fields[k];});
+    if (miss.length && text.length <= 25) {
+      var k = miss[0];
+      var ok = false;
+      if (k === "enroll_year") {
+        var y3 = text.match(/((?:19|20)\d{2})/);
+        if (y3) { D.fields[k] = y3[1]; ok = true; }
+      } else {
+        var v = text.replace(/^(我是|是|叫|读|学的|在|就读于|毕业于)\s*/, "")
+                    .replace(/[。.！!?？,，;；]$/, "").trim();
+        if (k === "school" && /(专业|系|级|毕业)/.test(v)) {
+          // 回答不像学校名,跳过
+        } else if (k === "major" && /(大学|学院)/.test(v)) {
+          // 回答像学校名,跳过
+        } else if (v.length >= 2 && v.length <= 12) {
+          D.fields[k] = v; ok = true;
+        }
+      }
+      if (ok) {
+        touched = true;
+        var ei = D.extra.indexOf(text.trim());
+        if (ei >= 0) D.extra.splice(ei, 1);
+      }
+    }
     if (touched) addSys("✅ 已记录");
     save();
     askKeyField();
