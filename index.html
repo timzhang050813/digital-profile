@@ -691,6 +691,11 @@ function aiUnderstand(text) {
     "certificates证书(数组) awards获奖荣誉(数组) career_intent求职意向(数组) " +
     "self_eval自我评价(数组)。零散信息放extra(数组)。" +
     "用户消息可能是:1)自我介绍或回答某个追问→intent=extract,给出提取字段,reply简短确认;" +
+    "注意:用户是自然口语,可能没有标点符号(如'技能有C语言Python和SolidWorks')," +
+    "你必须按语义拆分字段值,不要依赖标点;" +
+    "还要智能归类:软件/工具名(AutoCAD、Visual Studio、Zemax、EDA、SolidWorks、C语言等)属于skills技能," +
+    "课程名(量子力学等)属于courses,'我在XX公司实习做了XX'属于experience,'创办了XX社团/参加XX活动'属于campus_activities," +
+    "证书(四六级/普通话等)属于certificates,奖项/奖学金属于awards;" +
     "2)查看/修改/增加/更正/重新开始→intent=command,type为view/reset/modify/append/correct," +
     "(用户说'重新来/从头开始/从学校开始重新来/重填'→type=reset)," +
     "field用中文(学校/专业/入学年份/课程/技能/项目/经历/社团/校园/证书/获奖/荣誉/意向/自我评价/评价/爱好/其他)," +
@@ -869,6 +874,12 @@ function renderSidebar() {
   });
   if (D.extra.length) item("extra", D.extra, "ℹ️ 其他");
   if (!has) html += "<div class='side-empty'>还没有填写内容<br>在左侧对话里告诉我吧</div>";
+  if (!AI_ON && D.phase !== "shared") {
+    html += "<div style='background:#1e293b;border:1px dashed var(--accent);border-radius:8px;padding:8px 10px;font-size:12px;color:#7dd3fc;margin-top:8px;'>" +
+            "💡 开启 <b>AI 模式</b>(右上角⚙️)后:<br>· 说话不用标点,AI 按语义理解<br>" +
+            "· AutoCAD、EDA 会自动归为技能,不会放错栏<br>" +
+            "· 识别修改/更正/追加等意图</div>";
+  }
   html += "<div style='margin-top:10px;text-align:center;'>" +
           "<button class='btn ghost' style='font-size:12px;padding:6px 14px;' onclick='sideReset()'>🔄 从头开始</button></div>";
   panel.innerHTML = html;
