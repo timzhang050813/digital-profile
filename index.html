@@ -52,6 +52,7 @@
 <header>
   <h1>📋 数码档案创建器</h1>
   <p>对话式建档 · AI 可信度核验 · 简历式输出</p>
+  <button onclick="aiSetup()" style="position:absolute;right:12px;top:14px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;">⚙️ AI设置</button>
 </header>
 <div id="chat"></div>
 <div id="inputbar">
@@ -556,6 +557,157 @@ function showShared(payload) {
     "bot");
 }
 
+/* ---------------- 大模型理解引擎(真正的 AI 语境理解) ---------------- */
+var AI_KEY = "";
+try { AI_KEY = localStorage.getItem("dpc_ai_key") || ""; } catch(e) {}
+var AI_ON = !!AI_KEY;
+
+function aiSetKey(k) {
+  AI_KEY = (k || "").trim();
+  try { localStorage.setItem("dpc_ai_key", AI_KEY); } catch(e) {}
+  AI_ON = !!AI_KEY;
+}
+function aiSetup() {
+  var k = window.prompt("输入 DeepSeek API Key(以 sk- 开头)。\nKey 只保存在你当前浏览器,不会上传到任何服务器。\n(不需要可点取消)", AI_KEY);
+  if (k === null) return;
+  aiSetKey(k);
+  addSys(AI_ON
+    ? "✅ AI 智能模式已开启!现在由大模型理解你的每句话(提取/修改/更正/核验都能听懂)"
+    : "❌ Key 已清除,退回基础规则模式");
+}
+function aiUnderstand(text) {
+  var fields = {};
+  KEY_FIELDS.forEach(function(k){ if (D.fields[k]) fields[k] = D.fields[k]; });
+  OPTIONAL_FIELDS.forEach(function(k){
+    if (D.fields[k] && D.fields[k].length) fields[k] = D.fields[k];
+  });
+  var question = "";
+  if (D.phase === "collect") {
+    var miss = KEY_FIELDS.filter(function(k){return !D.fields[k];});
+    if (miss.length) question = "正在追问:" + FIELD_LABELS[miss[0]];
+  } else if (D.phase === "deep") {
+    question = "正在追问:" + OPTIONAL_LABELS[OPTIONAL_FIELDS[D.deep_idx]];
+  } else if (D.phase === "verify" && D.verify_idx < D.pending_q.length) {
+    question = "正在核验:" + D.pending_q[D.verify_idx].text;
+  }
+  var sys = "你是「数码档案创建器」的大模型语境理解引擎,帮用户通过对话创建求职简历档案。" +
+    "字段定义:school学校 major专业 enroll_year入学年份(4位数字) courses主修课程(数组) " +
+    "skills技能(数组) experience实习/项目经历(数组) campus_activities校园经历(数组) " +
+    "certificates证书(数组) awards获奖荣誉(数组) career_intent求职意向(数组) " +
+    "self_eval自我评价(数组)。零散信息放extra(数组)。" +
+    "用户消息可能是:1)自我介绍或回答某个追问→intent=extract,给出提取字段,reply简短确认;" +
+    "2)查看/修改/增加/更正/重新开始→intent=command,type为view/reset/modify/append/correct," +
+    "field用中文(学校/专业/入学年份/课程/技能/项目/经历/社团/校园/证书/获奖/荣誉/意向/自我评价/评价/爱好/其他)," +
+    "value为新值(数组字段请给数组);3)回答核验题→intent=verify,给出signals语境分析" +
+    "(各0-5:specificity具体性 naturalness自然度 consistency与档案一致性 plausibility常识合理性 evasiveness回避度)," +
+    "和note一句语境分析结论;4)闲聊或其他→intent=chat,reply自然简短回应。" +
+    "只输出一个JSON对象,不要输出其他任何文字。" +
+    "当前已填字段:" + JSON.stringify(fields, null, 0) +
+    " 当前阶段:" + D.phase + " " + question;
+  return fetch("https://api.deepseek.com/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + AI_KEY },
+    body: JSON.stringify({
+      model: "deepseek-chat",
+      messages: [{ role: "system", content: sys }, { role: "user", content: text }],
+      temperature: 0.1,
+      response_format: { type: "json_object" }
+    })
+  }).then(function(res){
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }).then(function(data){
+    return JSON.parse(data.choices[0].message.content);
+  });
+}
+function signalAdj(signals) {
+  var s = signals || {};
+  var avg = ((s.specificity||0)+(s.naturalness||0)+(s.consistency||0)+(s.plausibility||0))/4;
+  var adj = avg>=4.5 ? 8 : avg>=3.5 ? 5 : avg>=2.5 ? 0 : avg>=1.5 ? -6 : -10;
+  return Math.max(-15, Math.min(10, adj - (s.evasiveness||0)));
+}
+/* 处理 AI 结果;返回 true 表示已处理 */
+function handleAIResult(r) {
+  if (!r || typeof r !== "object") return false;
+  var intent = r.intent || "";
+  if (intent === "extract") {
+    var touched = false;
+    var f = r.fields || {};
+    KEY_FIELDS.forEach(function(k){
+      if (f[k] && !D.fields[k]) { D.fields[k] = String(f[k]).trim(); touched = true; }
+    });
+    OPTIONAL_FIELDS.forEach(function(k){
+      if (f[k]) {
+        var v = Array.isArray(f[k]) ? f[k].map(String) : [String(f[k])];
+        v = v.map(function(s){return s.trim();}).filter(function(s){return s;});
+        if (v.length) { D.fields[k] = v; touched = true; }
+      }
+    });
+    (r.extra || []).forEach(function(e){
+      var s = String(e).trim();
+      if (s && D.extra.indexOf(s) < 0) { D.extra.push(s); touched = true; }
+    });
+    if (touched) { save(); addSys("✅ 已记录"); }
+    if (r.reply) addMsg(r.reply, "bot");
+    if (D.phase === "collect") askKeyField();
+    else if (D.phase === "deep") askDeep();
+    return true;
+  }
+  if (intent === "command") {
+    var c = r.command || {};
+    if (c.type === "view") { showCurrent(); }
+    else if (c.type === "reset") {
+      resetState(); addSys("🔄 已清空,从头开始填写"); greet(); askKeyField();
+    } else if (c.type === "modify" || c.type === "append" || c.type === "correct") {
+      var fname = c.field || "";
+      var field = FIELD_ALIAS[fname];
+      var val = c.value;
+      if (field && val !== undefined && val !== null && String(val).trim()) {
+        if (c.type === "append" && OPTIONAL_FIELDS.indexOf(field) >= 0) {
+          if (!D.fields[field]) D.fields[field] = [];
+          D.fields[field].push(String(val).trim());
+        } else if (KEY_FIELDS.indexOf(field) >= 0) {
+          D.fields[field] = String(val).trim();
+        } else if (OPTIONAL_FIELDS.indexOf(field) >= 0) {
+          var v2 = Array.isArray(val) ? val.map(String) : [String(val)];
+          D.fields[field] = v2.map(function(s){return s.trim();}).filter(function(s){return s;});
+        } else if (field === "extra") {
+          D.extra.push(String(val).trim());
+        }
+        save();
+        addSys("✅ 已" + (c.type === "append" ? "添加" : "更新"));
+        showCurrent();
+      } else {
+        showCurrent();
+      }
+    }
+    if (r.reply) addMsg(r.reply, "bot");
+    return true;
+  }
+  if (intent === "verify") {
+    if (D.phase === "verify" && D.verify_idx < D.pending_q.length) {
+      var q = D.pending_q[D.verify_idx];
+      var sig = r.signals || r.verify || {};
+      var adj = signalAdj(sig);
+      var note = r.note || "语境分析:由大模型评估";
+      D.verify.push({ id: q.id, text: q.text, adj: adj, note: note });
+      D.adjustments.push(adj);
+      D.verify_idx++;
+      save();
+      var sign = adj > 0 ? "✅ 回答良好 +" + adj : adj < 0 ? "⚠️ 存疑 " + adj : "➖ 中性";
+      addSys("🔍 AI 语境分析: " + sign + "<br><span class='muted'>" + esc(note) + "</span>");
+      askVerify();
+      return true;
+    }
+    return false;
+  }
+  if (intent === "chat") {
+    addMsg(r.reply || "好的,继续吧 😊", "bot");
+    return true;
+  }
+  return false;
+}
+
 /* ---------------- 输入处理 ---------------- */
 /* 信息更正:识别"写错/说错/其实是/改成"等纠正意图,替换字段中的旧实体 */
 function handleCorrection(text) {
@@ -645,10 +797,22 @@ function cleanItem(s) {
 function splitItems(text) {
   return text.split(/[,，、;；]/).map(cleanItem).filter(function(s){return s.length > 0;});
 }
-function handleInput(text) {
+async function handleInput(text) {
   text = String(text||"").trim();
   if (!text) return;
   addMsg(esc(text), "user");
+  if (AI_ON) {
+    try {
+      var r = await aiUnderstand(text);
+      if (handleAIResult(r)) return;
+    } catch(e) {
+      addSys("⚠️ AI 调用失败(" + (e.message || "未知错误") + "),本次退回基础模式");
+    }
+  }
+  handleRuleInput(text);
+}
+/* 基础规则模式(无 AI / AI 失败时兜底;机械理解) */
+function handleRuleInput(text) {
   // 纠正意图优先处理
   if (/(写错|说错|错了|不对|纠正|更正|其实是|应该是|改成|打错|笔误)/.test(text) &&
       handleCorrection(text)) {
