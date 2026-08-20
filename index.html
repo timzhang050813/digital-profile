@@ -125,7 +125,7 @@ function genUID() {
   return "dpc-" + s;
 }
 var D = {phase:"collect", uid:genUID(), fields:{}, extra:[], verify:[], adjustments:[],
-         deep_idx:0, verify_idx:0, pending_q:[]};
+         deep_idx:0, verify_idx:0, pending_q:[], quiet:false, skipped:[]};
 
 function load() {
   try {
@@ -210,7 +210,7 @@ function migrateData() {
 }
 function resetState() {
   D = {phase:"collect", uid:genUID(), fields:{}, extra:[], verify:[], adjustments:[],
-       deep_idx:0, verify_idx:0, pending_q:[]};
+       deep_idx:0, verify_idx:0, pending_q:[], quiet:false, skipped:[]};
   save();
 }
 
@@ -476,7 +476,7 @@ function greet() {
     "bot");
 }
 function askKeyField() {
-  var miss = KEY_FIELDS.filter(function(k){return !D.fields[k];});
+  var miss = KEY_FIELDS.filter(function(k){return !D.fields[k] && (D.skipped||[]).indexOf(k) < 0;});
   if (!miss.length) {
     D.phase = "deep"; D.deep_idx = 0; save();
     return askDeep();
@@ -704,7 +704,12 @@ function aiUnderstand(text) {
     "field用中文(学校/专业/入学年份/课程/技能/项目/经历/社团/校园/证书/获奖/荣誉/意向/自我评价/评价/爱好/其他)," +
     "value为新值(数组字段请给数组);3)回答核验题→intent=verify,给出signals语境分析" +
     "(各0-5:specificity具体性 naturalness自然度 consistency与档案一致性 plausibility常识合理性 evasiveness回避度)," +
-    "和note一句语境分析结论;4)闲聊或其他→intent=chat,reply自然简短回应。" +
+    "4)闲聊或其他→intent=chat,reply自然简短回应。" +
+    "5)用户说'跳过/下一个/先不说'→intent=command,type=skip;" +
+    "说'继续/下一步/接着问/还缺什么'→intent=command,type=continue;" +
+    "说'我自己说/别问了/你别催/你别说话'→intent=command,type=quiet。" +
+    "对话以用户为主导:不要催促用户回答当前问题,用户提供信息就记录," +
+    "重复信息忽略,用户说'继续'才推进。" +
     "只输出一个JSON对象,不要输出其他任何文字。" +
     "当前已填字段:" + JSON.stringify(fields, null, 0) +
     " 当前阶段:" + D.phase + " " + question;
@@ -772,23 +777,18 @@ function handleAIResult(r) {
     if (touched) {
       save();
       addSys("✅ 已记录:" + added.join("、") + "<br><span class='muted'>档案现有 " +
-             countFilled() + " 项,继续聊,我会慢慢补全 →(右侧实时更新)</span>");
+             countFilled() + " 项,右侧已更新</span>");
     } else {
       addSys("ℹ️ 没有发现新信息(重复的内容不会覆盖已有档案)");
     }
     if (r.reply && D.phase !== "verify") addMsg(r.reply, "bot");
-    // 流程推进(由前端状态机决定,AI 无权跳流程):
-    // 关键字段(学校/专业/年份)没齐 → 回到 collect 逐项问;齐了 → 深度阶段
-    var miss = KEY_FIELDS.filter(function(k){return !D.fields[k];});
-    if (miss.length) {
-      D.phase = "collect";
-      askKeyField();
-    } else if (D.phase === "deep") {
-      askDeep();
-    } else if (D.phase === "collect") {
-      D.phase = "deep"; D.deep_idx = 0;
-      save();
-      askDeep();
+    // 以人为主:不强制追问。缺关键字段时给一句软提示,用户说"继续"才推进
+    if (!D.quiet) {
+      var miss = KEY_FIELDS.filter(function(k){return !D.fields[k];});
+      if (miss.length && D.phase === "collect") {
+        addSys("💡 还差:" + FIELD_LABELS[miss[0]] +
+               "  <span class='muted'>(可以说,或说'跳过'/'我自己说')</span>");
+      }
     }
     return true;
   }
@@ -797,6 +797,13 @@ function handleAIResult(r) {
     if (c.type === "view") { showCurrent(); }
     else if (c.type === "reset") {
       resetState(); addSys("🔄 已清空,从头开始填写"); greet(); askKeyField();
+    } else if (c.type === "skip") {
+      doSkip();
+    } else if (c.type === "continue") {
+      doContinue();
+    } else if (c.type === "quiet") {
+      D.quiet = true; save();
+      addSys("🤫 好,你说我听。想让我提问时说「继续」");
     } else if (c.type === "modify" || c.type === "append" || c.type === "correct") {
       var fname = c.field || "";
       var field = FIELD_ALIAS[fname];
@@ -937,6 +944,36 @@ function sideReset() {
   addSys("🔄 已清空,从头开始填写");
   greet(); askKeyField();
 }
+/* 以人为主:跳过/继续/聆听模式 */
+function doContinue() {
+  D.quiet = false;
+  var miss = KEY_FIELDS.filter(function(k){return !D.fields[k] && (D.skipped||[]).indexOf(k) < 0;});
+  if (miss.length) { D.phase = "collect"; askKeyField(); }
+  else if (D.phase === "collect") { D.phase = "deep"; D.deep_idx = 0; save(); askDeep(); }
+  else if (D.phase === "deep") { askDeep(); }
+  else if (D.phase === "verify") { askVerify(); }
+}
+function doSkip() {
+  if (D.phase === "collect") {
+    var miss = KEY_FIELDS.filter(function(k){return !D.fields[k] && (D.skipped||[]).indexOf(k) < 0;});
+    if (miss.length) {
+      D.skipped = (D.skipped||[]).concat(miss[0]);
+      save();
+      addSys("⏭️ 已跳过:" + FIELD_LABELS[miss[0]] + "(可随时补说)");
+    }
+    doContinue();
+  } else if (D.phase === "deep") {
+    D.fields[OPTIONAL_FIELDS[D.deep_idx]] = [];
+    D.deep_idx++; save();
+    addSys("⏭️ 已跳过:该项(可随时补说)");
+    doContinue();
+  } else if (D.phase === "verify" && D.verify_idx < D.pending_q.length) {
+    D.verify.push({id:D.verify_idx, text:D.pending_q[D.verify_idx].text, adj:0, note:"用户选择跳过"});
+    D.adjustments.push(0);
+    D.verify_idx++; save();
+    askVerify();
+  }
+}
 /* 查看当前已填内容 */
 function showCurrent() {
   var rows = "";
@@ -1040,6 +1077,25 @@ function handleRuleInput(text) {
   // 指令:泛修改请求 → 展示清单
   if (/(修改|更改|改一下|我想改|我要改|编辑|改错)/.test(text)) {
     showCurrent();
+    return;
+  }
+  // 指令:跳过 / 继续 / 聆听模式(以人为主)
+  if (/^(跳过|下一个|下一项|先不说|先不填|过)$|跳过(这项|这个)/.test(text)) {
+    doSkip();
+    return;
+  }
+  if (/^(继续|下一步|接着问|接着|还缺什么|还有什么|接下来|继续吧)/.test(text)) {
+    doContinue();
+    return;
+  }
+  if (/(我自己说|别问了|你别问|别催|我自己来|你别说|我听你的?不了)/.test(text)) {
+    D.quiet = true; save();
+    addSys("🤫 好,你说我听。想让我提问时说「继续」");
+    return;
+  }
+  if (/(继续问|接着问|你来问|你问我)/.test(text)) {
+    D.quiet = false; save();
+    doContinue();
     return;
   }
   // 指令:追加到某字段(技能方面增加EDA / 证书加上英语六级)
