@@ -115,8 +115,8 @@
  * 数据保存在本机浏览器 (localStorage),不上传任何服务器
  * ===================================================================== */
 
-var KEY_FIELDS = ["school","major","enroll_year"];
-var FIELD_LABELS = {school:"学校", major:"专业", enroll_year:"入学年份"};
+var KEY_FIELDS = ["name", "school", "major", "enroll_year"];
+var FIELD_LABELS = {name:"姓名", school:"学校", major:"专业", enroll_year:"入学年份"};
 var OPTIONAL_FIELDS = ["courses","skills","experience","campus_activities",
                        "certificates","awards","career_intent","self_eval"];
 var OPTIONAL_LABELS = {courses:"主修课程", skills:"技能特长", experience:"实习/项目经历",
@@ -173,6 +173,10 @@ function migrateData() {
     }
   });
   // 2. 专业清洗:去大学/学院名、"XX系"前缀、口语前缀
+  if (D.fields.school) {
+    var sc2 = String(D.fields.school).replace(/^(我是|我在|就读于|我毕业于|毕业于|来自|在|是|叫)/, "");
+    if (sc2 !== D.fields.school) { D.fields.school = sc2; changed = true; }
+  }
   if (D.fields.major) {
     var mj = String(D.fields.major);
     var schoolName = D.fields.school || "";
@@ -259,10 +263,13 @@ function pickYear(t) {
 function extractInfo(text) {
   var info = {}, extra = [];
   var m;
+  // 姓名(只认明确说法,避免误抓"我是上海大学…")
+  m = text.match(/(?:我叫|我的名字叫|我的名字是|名字叫|名字是|姓名是|姓名为)\s*([\u4e00-\u9fa5A-Za-z·]{2,10})/);
+  if (m) info.name = m[1];
   // 学校
   m = text.match(/([\u4e00-\u9fa5A-Za-z]{2,20}?)(?:大学|学院)/);
   if (m) {
-    var sch = m[0].replace(/^(我是|我在|就读于|我毕业于|毕业于|来自|在|毕业于)/, "");
+    var sch = m[0].replace(/^(我是|我在|就读于|我毕业于|毕业于|来自|在|是|叫|毕业于)/, "");
     if (/(大学|学院)$/.test(sch) && sch.length >= 4) info.school = sch;
   }
   // 入学年份: XX级 / XX年入学 / 简短年份回答(2022、2022年)
@@ -279,11 +286,13 @@ function extractInfo(text) {
   m = text.match(/(?:系|学院)?([\u4e00-\u9fa5A-Za-z·]{2,20}?专业)/);
   if (m) {
     var majorRaw = m[1].replace(/专业$/, "").trim();
-    majorRaw = majorRaw.replace(/^(我是|我在|就读于|我毕业于|毕业于|来自)/, "");
+    majorRaw = majorRaw.replace(/^(我是|我在|就读于|我毕业于|毕业于|来自|是)/, "");
     var schoolName = info.school || "";
     if (schoolName && majorRaw.indexOf(schoolName) === 0) {
       majorRaw = majorRaw.slice(schoolName.length);
     }
+    // 去掉"XX大学/XX学院"前缀(防止整句话被套进专业)
+    majorRaw = majorRaw.replace(/^[\u4e00-\u9fa5]{2,20}?(?:大学|学院)/, "");
     // 去掉"XX系"前缀(物理系理论物理 → 理论物理)
     majorRaw = majorRaw.replace(/^[\u4e00-\u9fa5]{1,4}系/, "");
     if (majorRaw.length >= 2) info.major = majorRaw;
@@ -436,6 +445,7 @@ function buildResume() {
   L.push("> 核验进度:已答 " + D.verify.length + "/" + D.pending_q.length + " 题");
   L.push("> 评分说明:由「数码档案创建器」AI 验证引擎基于常识规则与对话核验自动生成,仅供参考。");
   L.push(""); L.push("- 状态:✅ 已确认");
+  if (f.name) L.push("- 姓名:" + f.name);
   L.push(""); L.push("## 🎓 教育背景"); L.push("");
   L.push("| 学校 | 专业 | 入学年份 |"); L.push("| --- | --- | --- |");
   L.push("| " + (f.school||"") + " | " + (f.major||"") + " | " + (f.enroll_year||"") + " |");
@@ -498,7 +508,7 @@ function askKeyField() {
     D.phase = "deep"; D.deep_idx = 0; save();
     return askDeep();
   }
-  var q = {school:"你所在的学校是?", major:"你的专业是?", enroll_year:"你的入学年份是?(如 2022)"}[miss[0]];
+  var q = {name:"你叫什么名字?", school:"你所在的学校是?", major:"你的专业是?", enroll_year:"你的入学年份是?(如 2022)"}[miss[0]];
   addMsg(q, "bot");
 }
 function askDeep() {
@@ -734,7 +744,7 @@ function aiUnderstand(text) {
     question = "正在核验:" + D.pending_q[D.verify_idx].text;
   }
   var sys = "你是「数码档案创建器」的大模型语境理解引擎,帮用户通过对话创建求职简历档案。" +
-    "字段定义:school学校 major专业 enroll_year入学年份(4位数字) courses主修课程(数组) " +
+    "字段定义:name姓名(用户说'我叫/名字是'时提取,最重要的字段) school学校 major专业 enroll_year入学年份(4位数字) courses主修课程(数组) " +
     "skills技能(数组) experience实习/项目经历(数组) campus_activities校园经历(数组) " +
     "certificates证书(数组) awards获奖荣誉(数组) career_intent求职意向(数组) " +
     "self_eval自我评价(数组)。零散信息放extra(数组)。" +
