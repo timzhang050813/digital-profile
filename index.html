@@ -693,6 +693,9 @@ function aiUnderstand(text) {
     "用户消息可能是:1)自我介绍或回答某个追问→intent=extract,给出提取字段,reply简短确认;" +
     "注意:用户是自然口语,可能没有标点符号(如'技能有C语言Python和SolidWorks')," +
     "你必须按语义拆分字段值,不要依赖标点;" +
+    "用户会在多轮对话中零散地提供信息(今天说学校、明天补技能),只提取本条消息中" +
+    "新出现的信息;与已有字段重复的忽略,不覆盖已有值(除非用户明确说'改成/其实是/写错了');" +
+    "reply 里列出本次新记录了什么;" +
     "还要智能归类:软件/工具名(AutoCAD、Visual Studio、Zemax、EDA、SolidWorks、C语言等)属于skills技能," +
     "课程名(量子力学等)属于courses,'我在XX公司实习做了XX'属于experience,'创办了XX社团/参加XX活动'属于campus_activities," +
     "证书(四六级/普通话等)属于certificates,奖项/奖学金属于awards;" +
@@ -721,6 +724,16 @@ function aiUnderstand(text) {
     return JSON.parse(data.choices[0].message.content);
   });
 }
+/* 统计档案已填字段数 */
+function countFilled() {
+  var n = 0;
+  KEY_FIELDS.forEach(function(k){ if (D.fields[k]) n++; });
+  OPTIONAL_FIELDS.forEach(function(k){
+    if (D.fields[k] && D.fields[k].length) n++;
+  });
+  if (D.extra.length) n++;
+  return n;
+}
 function signalAdj(signals) {
   var s = signals || {};
   var avg = ((s.specificity||0)+(s.naturalness||0)+(s.consistency||0)+(s.plausibility||0))/4;
@@ -733,22 +746,36 @@ function handleAIResult(r) {
   var intent = r.intent || "";
   if (intent === "extract") {
     var touched = false;
+    var added = [];
     var f = r.fields || {};
     KEY_FIELDS.forEach(function(k){
-      if (f[k] && !D.fields[k]) { D.fields[k] = String(f[k]).trim(); touched = true; }
+      if (f[k] && !D.fields[k]) { D.fields[k] = String(f[k]).trim(); touched = true; added.push(FIELD_LABELS[k]); }
     });
     OPTIONAL_FIELDS.forEach(function(k){
       if (f[k]) {
         var v = Array.isArray(f[k]) ? f[k].map(String) : [String(f[k])];
         v = v.map(function(s){return s.trim();}).filter(function(s){return s;});
-        if (v.length) { D.fields[k] = v; touched = true; }
+        if (v.length) {
+          if (!D.fields[k]) D.fields[k] = [];
+          var before = D.fields[k].length;
+          v.forEach(function(x){
+            if (D.fields[k].indexOf(x) < 0) D.fields[k].push(x);
+          });
+          if (D.fields[k].length > before) { touched = true; added.push(OPTIONAL_LABELS[k]); }
+        }
       }
     });
     (r.extra || []).forEach(function(e){
       var s = String(e).trim();
-      if (s && D.extra.indexOf(s) < 0) { D.extra.push(s); touched = true; }
+      if (s && D.extra.indexOf(s) < 0) { D.extra.push(s); touched = true; added.push("其他信息"); }
     });
-    if (touched) { save(); addSys("✅ 已记录"); }
+    if (touched) {
+      save();
+      addSys("✅ 已记录:" + added.join("、") + "<br><span class='muted'>档案现有 " +
+             countFilled() + " 项,继续聊,我会慢慢补全 →(右侧实时更新)</span>");
+    } else {
+      addSys("ℹ️ 没有发现新信息(重复的内容不会覆盖已有档案)");
+    }
     if (r.reply && D.phase !== "verify") addMsg(r.reply, "bot");
     // 流程推进(由前端状态机决定,AI 无权跳流程):
     // 关键字段(学校/专业/年份)没齐 → 回到 collect 逐项问;齐了 → 深度阶段
