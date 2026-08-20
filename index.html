@@ -163,7 +163,7 @@ function extractInfo(text) {
   m = text.match(/(20\d{2})\s*年[^,，。;；\n]*?(?:毕业|毕业于)/);
   if (m) info.grad_year = m[1];
   // 专业: XX专业 / 物理系XX
-  m = text.match(/(?:系|学院)?([\u4e00-\u9fa5A-Za-z·]{2,12}?专业)/);
+  m = text.match(/(?:系|学院)?([\u4e00-\u9fa5A-Za-z·]{2,20}?专业)/);
   if (m) {
     var majorRaw = m[1].replace(/专业$/, "").trim();
     majorRaw = majorRaw.replace(/^(我是|我在|就读于|毕业于|来自)/, "");
@@ -171,6 +171,8 @@ function extractInfo(text) {
     if (schoolName && majorRaw.indexOf(schoolName) === 0) {
       majorRaw = majorRaw.slice(schoolName.length);
     }
+    // 去掉"XX系"前缀(物理系理论物理 → 理论物理)
+    majorRaw = majorRaw.replace(/^[\u4e00-\u9fa5]{1,4}系/, "");
     if (majorRaw.length >= 2) info.major = majorRaw;
   }
   // 出生
@@ -182,14 +184,16 @@ function extractInfo(text) {
   // 爱好
   m = text.match(/爱好[是:：]?\s*([^。；;，,]+)/);
   if (m) extra.push("爱好:" + m[1].trim());
-  // 其他:剩余的句子(包含"编号"等具体信息)
+  // 其他:剩余的句子(包含"编号"等具体信息);排除年份回答等噪音
   var sentences = text.split(/[。；;!?\n]/).filter(function(s){return s.trim().length > 2;});
   for (var i = 0; i < sentences.length; i++) {
     var s = sentences[i].trim();
     var used = (s.indexOf("大学") >= 0 || s.indexOf("专业") >= 0 ||
                 s.indexOf("级") >= 0 || s.indexOf("毕业") >= 0 ||
                 s.indexOf("出生") >= 0 || s.indexOf("老家") >= 0 ||
-                s.indexOf("来自") >= 0 || s.indexOf("爱好") >= 0);
+                s.indexOf("来自") >= 0 || s.indexOf("爱好") >= 0 ||
+                s.indexOf("年份") >= 0 || s.indexOf("入学") >= 0 ||
+                s.indexOf("学校") >= 0);
     if (!used && /[0-9\u4e00-\u9fa5]/.test(s) && extra.indexOf(s) < 0) {
       extra.push(s);
     }
@@ -617,8 +621,9 @@ var FIELD_ALIAS = {
   "自我评价": "self_eval", "评价": "self_eval", "爱好": "extra", "其他": "extra"
 };
 function modifyField(text) {
-  var m = text.match(/(?:把|将)?([\u4e00-\u9fa5]{2,8}?)(?:修改为|修改成|改为|改成|换成|更新为|更正为)\s*(.+)/)
-       || text.match(/^(?:我要|我想|请|帮我)?(?:修改|改)\s*([\u4e00-\u9fa5]{2,8}?)\s*(?:为|成|是)\s*(.+)/);
+  var fnames = Object.keys(FIELD_ALIAS).join("|");
+  var m = text.match(new RegExp("(?:把|将)?(" + fnames + ")(?:修改为|修改成|改为|改成|换成|更新为|更正为)\\s*(.+)"))
+       || text.match(new RegExp("^(?:我要|我想|请|帮我)?(?:修改|改)\\s*(" + fnames + ")\\s*(?:为|成|是)\\s*(.+)"));
   if (!m) return false;
   var fname = m[1].replace(/[的了]?$/, "");
   var field = FIELD_ALIAS[fname];
@@ -632,6 +637,13 @@ function modifyField(text) {
     D.extra.push(val);
   }
   return true;
+}
+/* 清理列表条目:去掉"主要学习/语言能力为/擅长"等前缀 */
+function cleanItem(s) {
+  return s.replace(/^(主要(?:学习|课程|有|是)|学习|包括|语言能力为|擅长|熟练(?:使用|掌握)|掌握|会|懂|还有|加上)/, "").trim();
+}
+function splitItems(text) {
+  return text.split(/[,，、;；]/).map(cleanItem).filter(function(s){return s.length > 0;});
 }
 function handleInput(text) {
   text = String(text||"").trim();
@@ -669,6 +681,26 @@ function handleInput(text) {
   if (/(修改|更改|改一下|我想改|我要改|编辑|改错)/.test(text)) {
     showCurrent();
     return;
+  }
+  // 指令:追加到某字段(技能方面增加EDA / 证书加上英语六级)
+  var fnames = Object.keys(FIELD_ALIAS).join("|");
+  var addM = text.match(new RegExp("^(" + fnames + ")(?:方面|里|中|上)?(?:增加|加上|补充|追加|再加|添加|多一个)\\s*(.+)"));
+  if (addM) {
+    var afield = FIELD_ALIAS[addM[1].replace(/[的了]?$/, "")];
+    var aval = addM[2].trim().replace(/[。.！!?？,，;；]$/, "");
+    if (afield && aval) {
+      if (afield === "extra") { D.extra.push(aval); }
+      else if (OPTIONAL_FIELDS.indexOf(afield) >= 0) {
+        if (!D.fields[afield]) D.fields[afield] = [];
+        D.fields[afield].push(aval);
+      } else if (KEY_FIELDS.indexOf(afield) >= 0) {
+        D.fields[afield] = aval;
+      }
+      save();
+      addSys("✅ 已添加:「" + aval + "」到" + addM[1]);
+      showCurrent();
+      return;
+    }
   }
   if (D.phase === "collect") {
     var r = extractInfo(text);
@@ -720,7 +752,7 @@ function handleInput(text) {
   else if (D.phase === "deep") {
     var k = OPTIONAL_FIELDS[D.deep_idx];
     var val = (text === "没有" || text === "无" || text === "无没有" || text === "没") ? [] :
-              text.split(/[,，、;；]/).map(function(s){return s.trim();}).filter(function(s){return s.length>0;});
+              splitItems(text);
     D.fields[k] = val;
     D.deep_idx++;
     save();
