@@ -149,12 +149,29 @@ function load() {
   try {
     var s = JSON.parse(localStorage.getItem("dpc_state_v1"));
     if (s && s.phase) {
-      if (!s.uid) s.uid = genUID();
       D = s;
+      normalize();
       return true;
     }
   } catch(e) {}
   return false;
+}
+/* 状态规范化:旧数据/异常数据补齐缺失字段,防止白屏 */
+function normalize() {
+  if (!D || typeof D !== "object") {
+    D = {phase:"collect", uid:genUID(), fields:{}, extra:[], verify:[], adjustments:[], deep_idx:0, verify_idx:0, pending_q:[], quiet:false, skipped:[]};
+  }
+  if (!D.fields || typeof D.fields !== "object") D.fields = {};
+  if (!Array.isArray(D.extra)) D.extra = [];
+  if (!Array.isArray(D.verify)) D.verify = [];
+  if (!Array.isArray(D.adjustments)) D.adjustments = [];
+  if (!Array.isArray(D.pending_q)) D.pending_q = [];
+  if (!Array.isArray(D.skipped)) D.skipped = [];
+  if (typeof D.deep_idx !== "number" || isNaN(D.deep_idx)) D.deep_idx = 0;
+  if (typeof D.verify_idx !== "number" || isNaN(D.verify_idx)) D.verify_idx = 0;
+  if (typeof D.quiet !== "boolean") D.quiet = false;
+  if (!D.uid) D.uid = genUID();
+  if (!D.phase) D.phase = "collect";
 }
 function save() { try { localStorage.setItem("dpc_state_v1", JSON.stringify(D)); } catch(e) {} renderSidebar(); }
 /* 数据清洗:自动修复旧版本残留的脏数据(拆分/去前缀/移错位/删噪音) */
