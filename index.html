@@ -39,6 +39,23 @@
   .ai-light.ok { background:#34d399; box-shadow:0 0 8px rgba(52,211,153,.9); }
   .ai-light.bad { background:#f87171; box-shadow:0 0 8px rgba(248,113,113,.9); }
   .ai-light.warn { background:#fbbf24; box-shadow:0 0 8px rgba(251,191,36,.9); }
+  /* 欢迎页(启动封面) */
+  .welcome-page { position:fixed; inset:0; z-index:999; background:linear-gradient(170deg,#0b1524 0%,#1e3a5f 60%,#312e81 100%);
+                  display:flex; flex-direction:column; align-items:center; justify-content:center;
+                  text-align:center; padding:24px; overflow-y:auto; }
+  .welcome-page .wp-logo { font-size:52px; margin-bottom:8px; }
+  .welcome-page h1 { font-size:28px; color:#22d3ee; margin:6px 0 4px; letter-spacing:2px; }
+  .welcome-page .wp-en { font-size:13px; color:#64748b; letter-spacing:1px; margin-bottom:14px; }
+  .welcome-page .wp-slogan { font-size:15px; color:#a5f3fc; margin-bottom:22px; line-height:1.7; }
+  .welcome-page .wp-steps { max-width:360px; text-align:left; margin-bottom:26px; }
+  .welcome-page .wp-step { display:flex; gap:10px; align-items:flex-start; background:#1e293bcc;
+                 border:1px solid #334155; border-radius:12px; padding:12px 14px; margin-bottom:10px;
+                 font-size:13px; color:#cbd5e1; line-height:1.6; }
+  .welcome-page .wp-step b { color:#22d3ee; display:block; font-size:13.5px; margin-bottom:2px; }
+  .welcome-page .wp-btn { background:linear-gradient(90deg,#22d3ee,#34d399); color:#0f172a; border:none;
+                 border-radius:14px; padding:15px 42px; font-size:17px; font-weight:800; cursor:pointer;
+                 box-shadow:0 6px 24px rgba(34,211,238,.35); }
+  .welcome-page .wp-note { font-size:11px; color:#475569; margin-top:16px; }
   @media (max-width:800px) {
     #main { flex-direction:column; }
     #side { width:100%; border-left:none; border-top:1px solid #1e293b;
@@ -112,6 +129,20 @@
 </div>
 <input type="file" id="fileImport" accept=".json" style="display:none"
        onchange="importBackup(this.files[0]); this.value='';">
+</div>
+<!-- 欢迎页(启动封面) -->
+<div class="welcome-page" id="welcomePage">
+  <div class="wp-logo">🌐</div>
+  <h1>数码人档案</h1>
+  <div class="wp-en">DIGITAL HUMAN ARCHIVE</div>
+  <div class="wp-slogan">对话建档 · AI 可信度核验 · 一键分享</div>
+  <div class="wp-steps">
+    <div class="wp-step"><b>① 对话建档</b>像聊天一样说话,AI 帮你整理成规范的数码档案</div>
+    <div class="wp-step"><b>② 可信度核验</b>侦查式反问 + AI 语境分析,生成可信度徽章</div>
+    <div class="wp-step"><b>③ 分享发布</b>一键生成简历与分享链接,发给招聘方</div>
+  </div>
+  <button class="wp-btn" onclick="enterWelcome()">🚀 开始填写我的数码档案</button>
+  <div class="wp-note">数据只保存在你的浏览器本地 · 不上传任何服务器</div>
 </div>
 <script>
 "use strict";
@@ -1375,12 +1406,38 @@ input.addEventListener("keydown", function(e){ if (e.key === "Enter") { handleIn
     if (D.phase === "deep") askDeep();
     else if (D.phase === "verify") { D.pending_q = genVerifyQuestions(); askVerify(); }
     else if (D.phase === "review") showReview();
+  } else if (load()) {
+    // collect 阶段:档案还是空的 → 欢迎页;已有内容 → 继续建档
+    if (isProfileEmpty()) {
+      showWelcome();
+    } else {
+      greet();
+      askKeyField();
+    }
   } else {
     resetState();
-    greet();
-    askKeyField();
+    showWelcome();  // 全新用户:先展示欢迎页,点击"开始填写"才进入对话
   }
 })();
+/* 档案是否完全为空(用于决定是否显示欢迎页) */
+function isProfileEmpty() {
+  var any = false;
+  KEY_FIELDS.forEach(function(k){ if (D.fields[k]) any = true; });
+  OPTIONAL_FIELDS.forEach(function(k){ if (D.fields[k] && D.fields[k].length) any = true; });
+  if (D.extra && D.extra.length) any = true;
+  return !any;
+}
+/* 欢迎页 */
+function showWelcome() {
+  var wp = document.getElementById("welcomePage");
+  if (wp) wp.style.display = "flex";
+}
+function enterWelcome() {
+  var wp = document.getElementById("welcomePage");
+  if (wp) wp.style.display = "none";
+  greet();
+  askKeyField();
+}
 </script>
 </body>
 </html>
