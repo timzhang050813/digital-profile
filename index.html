@@ -82,6 +82,12 @@
 </style>
 </head>
 <body>
+<!-- 开机异常提示条:检测到旧数据/异常时自动出现 -->
+<div id="bootTip" style="display:none;background:#7f1d1d;color:#fca5a5;text-align:center;padding:8px 12px;font-size:12.5px;line-height:1.6;">
+  ⚠️ 检测到本地旧数据,已自动尝试修复。<b>如果页面仍显示异常(资料错乱/白屏/没反应)</b>,
+  请点击 <button onclick="hardReset()" style="background:#f87171;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:700;cursor:pointer;margin:0 4px;">🧹 一键重置</button>
+  清除旧数据从头开始(不会影响已发布的档案)。
+</div>
 <div id="app">
 <header>
   <h1>📋 数码人档案</h1>
@@ -246,6 +252,19 @@ function migrateData() {
     if (keep.join("|") !== arr.join("|")) { D.fields[k] = keep; changed = true; }
   });
   return changed;
+}
+/* 检测本地数据是否仍含旧版脏数据特征(用于开机提示) */
+function detectDirty() {
+  try {
+    var raw = localStorage.getItem("dpc_state_v1");
+    if (!raw) return false;
+    return /海师范大学|是上海|方面增加|语言能力为|主要学习|Auto CAD|入学年份是20/.test(raw);
+  } catch(e) { return false; }
+}
+function hardReset() {
+  if (!confirm("确定清除本机所有档案数据,从头开始?\n(已发布的公开档案不受影响)")) return;
+  try { localStorage.removeItem("dpc_state_v1"); } catch(e) {}
+  location.reload();
 }
 function resetState() {
   D = {phase:"collect", uid:genUID(), fields:{}, extra:[], verify:[], adjustments:[],
@@ -1002,6 +1021,7 @@ function renderSidebar() {
             "· AutoCAD、EDA 会自动归为技能,不会放错栏<br>" +
             "· 识别修改/更正/追加等意图</div>";
   }
+  html += "<button class='btn ghost' style='font-size:12px;padding:6px 14px;width:100%;color:#f87171;border-color:#f8717166;' onclick='hardReset()'>🧹 开机异常?一键重置</button>";
   html += "<div style='margin-top:10px;text-align:center;'>" +
           "<button class='btn ghost' style='font-size:12px;padding:6px 14px;' onclick='sideReset()'>🔄 从头开始</button></div>";
   panel.innerHTML = html;
@@ -1336,6 +1356,11 @@ input.addEventListener("keydown", function(e){ if (e.key === "Enter") { handleIn
       addSys("🧹 已自动修复旧数据:拆分未拆分的条目、清理口语前缀、移正错位内容");
     }
     renderSidebar();
+    // 开机异常提示:本地数据仍含脏特征时,显示"一键重置"引导
+    if (detectDirty()) {
+      var tip = document.getElementById("bootTip");
+      if (tip) tip.style.display = "block";
+    }
   }
   // 启动时自动验证 AI 连接状态(有 key 时)
   if (AI_ON) testAI();
